@@ -1,0 +1,34 @@
+{
+  "name": "mtg-deck-builder-ultra",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "build:cards": "tsx scripts/build-card-index.ts",
+    "inspect:cards": "tsx scripts/inspect-cards.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dexie": "^4.0.11",
+    "lucide-react": "^0.475.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.6",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "fake-indexeddb": "^6.0.0",
+    "tailwindcss": "^4.0.6",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vite": "^6.1.0",
+    "vitest": "^3.0.9"
+  }
+}

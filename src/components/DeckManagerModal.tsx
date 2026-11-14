@@ -1,0 +1,466 @@
+import {
+  Check,
+  Copy,
+  Download,
+  FolderOpen,
+  Link2,
+  Plus,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import type { SavedDeckRecord } from '../db/cardDb.js';
+import { generateDeckId } from '../db/deckDb.js';
+import { exportDeckToText, parseDeckListText } from '../deck/deckSerializer.js';
+import { encodeDeckToUrlParam } from '../deck/urlCodec.js';
+import type { CompactCard } from '../types/card.js';
+import type { DeckCardEntry, DeckDraft } from '../types/deck.js';
+
+export type DeckManagerTab = 'decks' | 'import-export' | 'share';
+
+interface DeckManagerModalProps {
+  open: boolean;
+  initialTab: DeckManagerTab;
+  activeDeck: DeckDraft;
+  savedDecks: SavedDeckRecord[];
+  resolveCards: (req: {
+    ids?: string[];
+    names?: string[];
+  }) => Promise<{ byId: Record<string, CompactCard>; byName: Record<string, CompactCard> }>;
+  onClose: () => void;
+  onCreateNewDeck: (name?: string) => Promise<void>;
+  onSwitchDeck: (deckId: string) => Promise<void>;
+  onDuplicateCurrentDeck: () => Promise<void>;
+  onDeleteDeck: (deckId: string) => Promise<void>;
+  onImportDeckDraft: (draft: DeckDraft, noticeMessage?: string) => void;
+}
+
+function countRecordCards(record: SavedDeckRecord): number {
+  let total = record.commanderIds.length;
+  for (const qty of Object.values(record.mainboard)) total += qty;
+  return total;
+}
+
+export function DeckManagerModal({
+  open,
+  initialTab,
+  activeDeck,
+  savedDecks,
+  resolveCards,
+  onClose,
+  onCreateNewDeck,
+  onSwitchDeck,
+  onDuplicateCurrentDeck,
+  onDeleteDeck,
+  onImportDeckDraft,
+}: DeckManagerModalProps) {
+  const [tab, setTab] = useState<DeckManagerTab>(initialTab);
+  const [newDeckName, setNewDeckName] = useState('');
+  const [importText, setImportText] = useState('');
+  const [importStatus, setImportStatus] = useState<{
+    imported: number;
+    missingNames: string[];
+  } | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<'export' | 'share' | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setTab(initialTab);
+      setImportStatus(null);
+      setCopiedKey(null);
+    }
+  }, [open, initialTab]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
+  const exportedText = useMemo(() => exportDeckToText(activeDeck, true), [activeDeck]);
+  const shareUrl = useMemo(() => {
+    if (!open || typeof window === 'undefined') return '';
+    const encoded = encodeDeckToUrlParam(activeDeck);
+    return `${window.location.origin}${window.location.pathname}?d=${encoded}`;
+  }, [open, activeDeck]);
+
+  if (!open) return null;
+
+  const copyToClipboard = async (value: string, key: 'export' | 'share') => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedKey(key);
+      window.setTimeout(() => setCopiedKey(null), 2200);
+    } catch {
+      // Fallback ignored cleanly
+    }
+  };
+
+  const handleDownloadTxt = () => {
+    const blob = new Blob([exportedText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const safeFilename =
+      activeDeck.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || 'commander-deck';
+    a.download = `${safeFilename}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = async () => {
+    const parsed = parseDeckListText(importText);
+    if (parsed.lines.length === 0) return;
+
+    setIsImporting(true);
+    try {
+      const uniqueNames = Array.from(new Set(parsed.lines.map((l) => l.name)));
+      const { byName } = await resolveCards({ names: uniqueNames });
+
+      const commanders: CompactCard[] = [];
+      const mainboard: Record<string, DeckCardEntry> = {};
+      const sideboard: Record<string, DeckCardEntry> = {};
+      const missingNames: string[] = [];
+      let importedCount = 0;
+
+      for (const line of parsed.lines) {
+        const card = byName[line.name.trim().toLowerCase()];
+        if (!card) {
+          if (!missingNames.includes(line.name)) missingNames.push(line.name);
+          continue;
+        }
+
+        if (line.section === 'commander' && card.isCommanderEligible && commanders.length < 2) {
+          if (!commanders.some((c) => c.id === card.id)) {
+            commanders.push(card);
+            importedCount += 1;
+          }
+          continue;
+        }
+
+        const targetBoard = line.section === 'sideboard' ? sideboard : mainboard;
+        const existing = targetBoard[card.id];
+        targetBoard[card.id] = {
+          card,
+          quantity: (existing?.quantity ?? 0) + line.quantity,
+        };
+        importedCount += line.quantity;
+      }
+
+      const now = new Date().toISOString();
+      const nextDraft: DeckDraft = {
+        id: generateDeckId(),
+        name: parsed.name || 'Imported Commander Deck',
+        commanders,
+        mainboard,
+        sideboard,
+        lockSearchToCommanderIdentity: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      onImportDeckDraft(
+        nextDraft,
+        `Imported "${nextDraft.name}" (${importedCount} cards${
+          missingNames.length > 0 ? `, ${missingNames.length} unrecognized` : ''
+        }).`,
+      );
+      setImportStatus({ imported: importedCount, missingNames });
+      if (missingNames.length === 0) {
+        onClose();
+      }
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Deck Manager"
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-900 shadow-2xl"
+      >
+        {/* Modal Header & Tabs */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-5 py-3.5">
+          <div className="flex items-center gap-1 rounded-xl border border-slate-800 bg-slate-950 p-1 text-xs">
+            {(
+              [
+                { id: 'decks', label: 'My Decks', icon: FolderOpen },
+                { id: 'import-export', label: 'Import / Export', icon: Upload },
+                { id: 'share', label: 'Share URL', icon: Link2 },
+              ] as const
+            ).map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setTab(item.id)}
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold transition ${
+                    tab === item.id
+                      ? 'bg-amber-500/20 text-amber-200 ring-1 ring-amber-400/40'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close deck manager"
+            className="rounded-lg border border-slate-700 bg-slate-950 p-1.5 text-slate-400 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-5 text-xs">
+          {tab === 'decks' && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={newDeckName}
+                  onChange={(e) => setNewDeckName(e.target.value)}
+                  placeholder="New deck name (optional)..."
+                  className="min-w-[180px] flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-amber-400"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    void onCreateNewDeck(newDeckName.trim() || undefined);
+                    setNewDeckName('');
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-amber-500 px-3 py-2 font-semibold text-slate-950 hover:bg-amber-400"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  New Deck
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onDuplicateCurrentDeck()}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 font-semibold text-slate-200 hover:border-amber-400/50"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Duplicate Current
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {savedDecks.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-slate-800 p-6 text-center text-slate-400">
+                    Decks are saved automatically in your browser&apos;s IndexedDB.
+                  </p>
+                ) : (
+                  savedDecks.map((item) => {
+                    const isActive = item.id === activeDeck.id;
+                    const count = countRecordCards(item);
+                    return (
+                      <div
+                        key={item.id}
+                        className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border p-3 ${
+                          isActive
+                            ? 'border-amber-500/45 bg-amber-500/10'
+                            : 'border-slate-800 bg-slate-950/75'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-bold text-slate-100">
+                              {item.name}
+                            </span>
+                            {isActive && (
+                              <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200 ring-1 ring-amber-400/40">
+                                Active
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-0.5 font-mono text-[11px] text-slate-400">
+                            {count}/100 cards · Updated{' '}
+                            {new Date(item.updatedAt).toLocaleDateString()}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          {!isActive && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await onSwitchDeck(item.id);
+                                onClose();
+                              }}
+                              className="rounded-lg bg-slate-800 px-3 py-1.5 font-semibold text-slate-100 hover:bg-amber-500 hover:text-slate-950"
+                            >
+                              Load
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => void onDeleteDeck(item.id)}
+                            aria-label={`Delete deck ${item.name}`}
+                            className="rounded-lg border border-slate-800 bg-slate-900 p-1.5 text-slate-400 hover:border-rose-500/50 hover:text-rose-300"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
+          {tab === 'import-export' && (
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-slate-100">Import Decklist</h3>
+                  <span className="text-[11px] text-slate-400">Moxfield / Archidekt / MTGO</span>
+                </div>
+                <textarea
+                  value={importText}
+                  onChange={(e) => setImportText(e.target.value)}
+                  rows={12}
+                  placeholder={`COMMANDER:\n1 Korvold, Fae-Cursed King\n\nMAINBOARD:\n1 Sol Ring\n1 Arcane Signet\n1 Cultivate\n...`}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 p-3 font-mono text-[11px] text-slate-200 placeholder-slate-600 outline-none focus:border-sky-400"
+                />
+                <button
+                  type="button"
+                  disabled={!importText.trim() || isImporting}
+                  onClick={() => void handleImport()}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-sky-500 px-3 py-2 font-semibold text-slate-950 hover:bg-sky-400 disabled:opacity-40"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  {isImporting ? 'Resolving Cards...' : 'Import Into New Deck'}
+                </button>
+
+                {importStatus && (
+                  <div className="rounded-xl border border-slate-700 bg-slate-950 p-2.5 text-[11px]">
+                    <p className="font-semibold text-emerald-300">
+                      Imported {importStatus.imported} cards.
+                    </p>
+                    {importStatus.missingNames.length > 0 && (
+                      <p className="mt-1 text-amber-300">
+                        Unrecognized ({importStatus.missingNames.length}):{' '}
+                        {importStatus.missingNames.slice(0, 8).join(', ')}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-slate-100">Export Current Deck</h3>
+                  <span className="text-[11px] text-slate-400">Plain Text</span>
+                </div>
+                <textarea
+                  readOnly
+                  value={exportedText}
+                  rows={12}
+                  className="w-full rounded-xl border border-slate-800 bg-slate-950 p-3 font-mono text-[11px] text-slate-300 outline-none"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void copyToClipboard(exportedText, 'export')}
+                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 font-semibold text-slate-200 hover:border-amber-400/50"
+                  >
+                    {copiedKey === 'export' ? (
+                      <>
+                        <Check className="h-3.5 w-3.5 text-emerald-400" />
+                        Copied Text
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3.5 w-3.5" />
+                        Copy Text
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDownloadTxt}
+                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 font-semibold text-slate-200 hover:border-amber-400/50"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    .txt
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {tab === 'share' && (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-violet-500/30 bg-violet-950/20 p-4">
+                <h3 className="font-bold text-violet-100">
+                  Zero-Server Shareable URL (?d=...)
+                </h3>
+                <p className="mt-1 text-slate-300">
+                  Your entire deck (Commanders, Mainboard, and Considering) is binary-packed
+                  directly into this URL so anyone can open and clone it with zero backend
+                  database.
+                </p>
+              </div>
+
+              <textarea
+                readOnly
+                rows={4}
+                value={shareUrl}
+                className="w-full break-all rounded-xl border border-slate-700 bg-slate-950 p-3 font-mono text-[11px] text-slate-300 outline-none"
+              />
+
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono text-[11px] text-slate-400">
+                  Link length: {shareUrl.length.toLocaleString()} characters
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void copyToClipboard(shareUrl, 'share')}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-violet-500 px-4 py-2 font-semibold text-white hover:bg-violet-400"
+                >
+                  {copiedKey === 'share' ? (
+                    <>
+                      <Check className="h-3.5 w-3.5" />
+                      Copied Share Link
+                    </>
+                  ) : (
+                    <>
+                      <Link2 className="h-3.5 w-3.5" />
+                      Copy Share Link
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
