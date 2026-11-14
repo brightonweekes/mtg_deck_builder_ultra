@@ -4,12 +4,14 @@ import {
   canAddCardToDeck,
   canHaveSecondCommander,
   canPairCommanders,
+  getChooseCommanderFilter,
   getCombinedColorIdentity,
   getCompatiblePartnerFilter,
   getMaxAllowedCopies,
   isCardWithinColorIdentity,
 } from '../search/commanderRules.js';
 import type { CompactCard } from '../types/card.js';
+import { DEFAULT_SEARCH_FILTER } from '../types/search.js';
 
 function makeCard(overrides: Partial<CompactCard> = {}): CompactCard {
   const id = overrides.id ?? 'card-1';
@@ -300,5 +302,36 @@ describe('commanderRules', () => {
     });
 
     expect(getCompatiblePartnerFilter(makeCard({ partnerType: undefined }))).toBeNull();
+  });
+
+  it('builds a clean commander-only catalog filter for Studio Choose Commander action', () => {
+    expect(getChooseCommanderFilter()).toEqual({
+      ...DEFAULT_SEARCH_FILTER,
+      commanderOnly: true,
+    });
+
+    expect(
+      getChooseCommanderFilter({
+        sortBy: 'price-desc',
+        pageSize: 96,
+      }),
+    ).toEqual({
+      ...DEFAULT_SEARCH_FILTER,
+      commanderOnly: true,
+      sortBy: 'price-desc',
+      pageSize: 96,
+    });
+
+    expect(
+      getChooseCommanderFilter({
+        sortBy: 'synergy',
+        pageSize: 48,
+      }),
+    ).toEqual({
+      ...DEFAULT_SEARCH_FILTER,
+      commanderOnly: true,
+      sortBy: 'edhrec',
+      pageSize: 48,
+    });
   });
 });

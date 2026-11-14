@@ -20,7 +20,7 @@ export interface UseCardSearchReturn {
   searchResult: SearchResponsePayload | null;
   basicLands: Record<string, CompactCard>;
   isSearching: boolean;
-  updateFilter: (patch: Partial<SearchFilter>) => void;
+  updateFilter: (patch: Partial<SearchFilter>, options?: { immediate?: boolean }) => void;
   resetFilters: () => void;
   forceResync: () => void;
   resolveCards: (req: { ids?: string[]; names?: string[] }) => Promise<ResolvedCardsMap>;
@@ -118,7 +118,7 @@ export function useCardSearch(): UseCardSearchReturn {
   }, []);
 
   const updateFilter = useCallback(
-    (patch: Partial<SearchFilter>) => {
+    (patch: Partial<SearchFilter>, options?: { immediate?: boolean }) => {
       setFilter((prev) => {
         const next: SearchFilter = {
           ...prev,
@@ -132,9 +132,10 @@ export function useCardSearch(): UseCardSearchReturn {
         }
 
         const isTextEdit =
-          patch.query !== undefined ||
-          patch.themeQuery !== undefined ||
-          patch.maxPriceUsd !== undefined;
+          !options?.immediate &&
+          (patch.query !== undefined ||
+            patch.themeQuery !== undefined ||
+            patch.maxPriceUsd !== undefined);
 
         if (isTextEdit) {
           debounceTimerRef.current = setTimeout(() => {

@@ -15,6 +15,7 @@ import { useCardSearch } from './hooks/useCardSearch.js';
 import { useDeckDraft } from './hooks/useDeckDraft.js';
 import {
   buildCommanderSynergyQuery,
+  getChooseCommanderFilter,
   getCompatiblePartnerFilter,
 } from './search/commanderRules.js';
 import type { CompactCard, FunctionalRole, ManaColor } from './types/card.js';
@@ -284,6 +285,15 @@ export function App() {
     setActiveTab('search');
   }, [deck.commanders, updateFilter]);
 
+  const handleChooseCommander = useCallback(() => {
+    updateFilter(
+      getChooseCommanderFilter({ sortBy: filter.sortBy, pageSize: filter.pageSize }),
+      { immediate: true },
+    );
+    setActiveTab('search');
+    window.scrollTo?.({ top: 0, behavior: 'smooth' });
+  }, [filter.pageSize, filter.sortBy, updateFilter]);
+
   const handleFindSimilar = useCallback(
     (card: CompactCard) => {
       const synergyQuery = buildCommanderSynergyQuery([card]);
@@ -528,6 +538,7 @@ export function App() {
           onQuickFilterRole={handleQuickFilterRole}
           onOpenDeckManager={(t) => setDeckManagerTab(t)}
           onBackToSearch={() => setActiveTab('search')}
+          onChooseCommander={handleChooseCommander}
           onInspectCard={handleInspectRawCard}
         />
       )}

@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import {
   buildCommanderSynergyQuery,
   canPairCommanders,
+  getChooseCommanderFilter,
   getCombinedColorIdentity,
   getCompatiblePartnerFilter,
 } from '../search/commanderRules.js';
@@ -346,6 +347,21 @@ describe('CardSearchEngine against real 31,597-card Commander catalog', () => {
       expect(card).toBeDefined();
       expect(card!.priceUsd).not.toBeNull();
       expect(card!.priceUsd!).toBeGreaterThan(0);
+    }
+  });
+
+  it('filters exclusively to eligible commanders when using getChooseCommanderFilter', () => {
+    const cmdFilter = getChooseCommanderFilter({ sortBy: 'synergy', pageSize: 48 });
+    const result = engine.search(cmdFilter);
+
+    expect(cmdFilter.commanderOnly).toBe(true);
+    expect(cmdFilter.sortBy).toBe('edhrec');
+    expect(result.totalMatches).toBeGreaterThan(3_700);
+    expect(result.totalMatches).toBeLessThan(engine.totalCount);
+    expect(result.matches.length).toBe(48);
+    expect(result.executionTimeMs).toBeLessThan(25);
+    for (const { card } of result.matches) {
+      expect(card.isCommanderEligible).toBe(true);
     }
   });
 });

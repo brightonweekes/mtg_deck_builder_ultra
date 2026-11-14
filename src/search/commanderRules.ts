@@ -1,5 +1,5 @@
 import type { CompactCard, ManaColor } from '../types/card.js';
-import type { SearchFilter } from '../types/search.js';
+import { DEFAULT_SEARCH_FILTER, type SearchFilter } from '../types/search.js';
 
 const WUBRG_ORDER: readonly ManaColor[] = ['W', 'U', 'B', 'R', 'G'];
 
@@ -178,4 +178,25 @@ export function getCompatiblePartnerFilter(
     default:
       return null;
   }
+}
+
+/**
+ * Builds a clean SearchFilter for picking a primary Commander from the catalog:
+ * enables `commanderOnly`, clears unrelated deck/search constraints, resets
+ * `'synergy'` sort back to `'edhrec'`, and preserves explicit sort/pageSize.
+ */
+export function getChooseCommanderFilter(
+  current?: Pick<SearchFilter, 'sortBy' | 'pageSize'>,
+): SearchFilter {
+  const sortBy =
+    current?.sortBy && current.sortBy !== 'synergy'
+      ? current.sortBy
+      : DEFAULT_SEARCH_FILTER.sortBy;
+
+  return {
+    ...DEFAULT_SEARCH_FILTER,
+    commanderOnly: true,
+    sortBy,
+    pageSize: current?.pageSize ?? DEFAULT_SEARCH_FILTER.pageSize,
+  };
 }

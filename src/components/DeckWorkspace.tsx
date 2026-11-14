@@ -58,6 +58,7 @@ interface DeckWorkspaceProps {
   onQuickFilterRole: (role: FunctionalRole | 'lands') => void;
   onOpenDeckManager: (tab: 'decks' | 'import-export' | 'share') => void;
   onBackToSearch: () => void;
+  onChooseCommander: () => void;
   onInspectCard: (card: CompactCard) => void;
 }
 
@@ -190,6 +191,7 @@ export function DeckWorkspace({
   onQuickFilterRole,
   onOpenDeckManager,
   onBackToSearch,
+  onChooseCommander,
   onInspectCard,
 }: DeckWorkspaceProps) {
   const [groupMode, setGroupMode] = useState<DeckGroupMode>('role');
@@ -438,7 +440,7 @@ export function DeckWorkspace({
               </span>
               <button
                 type="button"
-                onClick={onBackToSearch}
+                onClick={onChooseCommander}
                 className="rounded-lg bg-amber-500/20 px-3 py-1.5 font-semibold text-amber-200 ring-1 ring-amber-400/40 hover:bg-amber-500/30"
               >
                 Choose Commander
