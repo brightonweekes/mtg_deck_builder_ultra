@@ -60,7 +60,7 @@ const firebaseMocks = vi.hoisted(() => ({
     if (mockState.appCheckError) throw mockState.appCheckError;
     return { app: _app };
   }),
-  ReCaptchaV3Provider: vi.fn(function (this: { siteKey: string }, siteKey: string) {
+  ReCaptchaEnterpriseProvider: vi.fn(function (this: { siteKey: string }, siteKey: string) {
     this.siteKey = siteKey;
   }),
   getAuth: vi.fn(() => mockState.auth),
@@ -166,7 +166,7 @@ vi.mock('firebase/app', () => ({
 
 vi.mock('firebase/app-check', () => ({
   initializeAppCheck: firebaseMocks.initializeAppCheck,
-  ReCaptchaV3Provider: firebaseMocks.ReCaptchaV3Provider,
+  ReCaptchaEnterpriseProvider: firebaseMocks.ReCaptchaEnterpriseProvider,
 }));
 
 vi.mock('firebase/auth', () => ({
@@ -422,12 +422,13 @@ import {
 } from '../cloud/firebaseProvider.js';
 import type { CloudCardListRecord, CloudDeckRecord } from '../types/cloud.js';
 
-function stubConfiguredFirebaseEnv(appCheckSiteKey = ''): void {
+function stubConfiguredFirebaseEnv(appCheckSiteKey = '', appCheckDebugToken = ''): void {
   vi.stubEnv('VITE_FIREBASE_API_KEY', 'test-api-key');
   vi.stubEnv('VITE_FIREBASE_AUTH_DOMAIN', 'test-project.firebaseapp.com');
   vi.stubEnv('VITE_FIREBASE_PROJECT_ID', 'test-project');
   vi.stubEnv('VITE_FIREBASE_APP_ID', '1:12345:web:abcdef');
   vi.stubEnv('VITE_FIREBASE_APP_CHECK_SITE_KEY', appCheckSiteKey);
+  vi.stubEnv('VITE_FIREBASE_APP_CHECK_DEBUG_TOKEN', appCheckDebugToken);
 }
 
 function makeMemoryLocalStorage() {
@@ -511,6 +512,7 @@ describe('firebaseConfig & FirebaseCloudProvider', () => {
   });
 
   afterEach(() => {
+    delete (globalThis as Record<string, unknown>).FIREBASE_APPCHECK_DEBUG_TOKEN;
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     resetFirebaseInstancesForTesting();
@@ -548,8 +550,8 @@ describe('firebaseConfig & FirebaseCloudProvider', () => {
       ).rejects.toThrow(/not configured/i);
     });
 
-    it('initializes Firestore with ignoreUndefinedProperties and safely guards App Check', () => {
-      stubConfiguredFirebaseEnv('recaptcha-site-key-123');
+    it('initializes Firestore with ignoreUndefinedProperties and Fraud Defense App Check', () => {
+      stubConfiguredFirebaseEnv('recaptcha-enterprise-site-key-123');
 
       expect(isFirebaseConfigured()).toBe(true);
       const db = getFirebaseDb();
@@ -558,7 +560,13 @@ describe('firebaseConfig & FirebaseCloudProvider', () => {
         ignoreUndefinedProperties: true,
       });
       expect(firebaseMocks.initializeAppCheck).toHaveBeenCalledTimes(1);
-      expect(firebaseMocks.ReCaptchaV3Provider).toHaveBeenCalledWith('recaptcha-site-key-123');
+      expect(firebaseMocks.ReCaptchaEnterpriseProvider).toHaveBeenCalledWith(
+        'recaptcha-enterprise-site-key-123',
+      );
+      expect(firebaseMocks.initializeAppCheck).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({ isTokenAutoRefreshEnabled: true }),
+      );
 
       // Also verify fallback to getFirestore if initializeFirestore throws (e.g., HMR) and safe App Check catch
       resetFirebaseInstancesForTesting();
@@ -569,6 +577,60 @@ describe('firebaseConfig & FirebaseCloudProvider', () => {
       const fallbackDb = getFirebaseDb();
       expect(fallbackDb).toEqual({ type: 'firestore-fallback' });
       expect(firebaseMocks.getFirestore).toHaveBeenCalledTimes(1);
+    });
+
+    it('applies App Check debug token only in dev mode on localhost/127.0.0.1', () => {
+      const stubbedWindow = {
+        localStorage: memoryStorage,
+        location: { hostname: 'localhost' },
+      } as Record<string, unknown>;
+      vi.stubGlobal('window', stubbedWindow);
+      stubConfiguredFirebaseEnv('enterprise-key-1', 'true');
+
+      getFirebaseApp();
+      expect(stubbedWindow.FIREBASE_APPCHECK_DEBUG_TOKEN).toBe(true);
+
+      // Specific UUID debug token on 127.0.0.1
+      resetFirebaseInstancesForTesting();
+      mockState.apps = [];
+      const loopbackWindow = {
+        localStorage: memoryStorage,
+        location: { hostname: '127.0.0.1' },
+      } as Record<string, unknown>;
+      vi.stubGlobal('window', loopbackWindow);
+      stubConfiguredFirebaseEnv('enterprise-key-1', '12345678-abcd-efgh-ijkl-987654321fed');
+
+      getFirebaseApp();
+      expect(loopbackWindow.FIREBASE_APPCHECK_DEBUG_TOKEN).toBe(
+        '12345678-abcd-efgh-ijkl-987654321fed',
+      );
+
+      // Never enable debug token on production hostnames
+      resetFirebaseInstancesForTesting();
+      mockState.apps = [];
+      const prodHostWindow = {
+        localStorage: memoryStorage,
+        location: { hostname: 'mtg-deck-builder-ultra.pages.dev' },
+      } as Record<string, unknown>;
+      vi.stubGlobal('window', prodHostWindow);
+      stubConfiguredFirebaseEnv('enterprise-key-1', 'true');
+
+      getFirebaseApp();
+      expect(prodHostWindow.FIREBASE_APPCHECK_DEBUG_TOKEN).toBeUndefined();
+
+      // Never enable debug token when PROD is true even on localhost
+      resetFirebaseInstancesForTesting();
+      mockState.apps = [];
+      const prodBuildLocalWindow = {
+        localStorage: memoryStorage,
+        location: { hostname: 'localhost' },
+      } as Record<string, unknown>;
+      vi.stubGlobal('window', prodBuildLocalWindow);
+      stubConfiguredFirebaseEnv('enterprise-key-1', 'true');
+      vi.stubEnv('PROD', true);
+
+      getFirebaseApp();
+      expect(prodBuildLocalWindow.FIREBASE_APPCHECK_DEBUG_TOKEN).toBeUndefined();
     });
   });
 

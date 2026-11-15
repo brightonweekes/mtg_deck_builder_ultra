@@ -15,7 +15,7 @@ When you want **multi-device deck sync**, **binders/wishlists/trade lists**, **s
 5. [Create Cloud Firestore Database](#5-create-cloud-firestore-database)
 6. [Deploy Security Rules (`firestore.rules`) & Indexes (`firestore.indexes.json`)](#6-deploy-security-rules-firestorerules--indexes-firestoreindexesjson)
 7. [Configure Environment Variables (Local & Cloudflare Pages)](#7-configure-environment-variables-local--cloudflare-pages)
-8. [(Optional) Enable Firebase App Check](#8-optional-enable-firebase-app-check)
+8. [(Optional) Enable Firebase App Check (Fraud Defense / reCAPTCHA Enterprise)](#8-optional-enable-firebase-app-check-fraud-defense--recaptcha-enterprise)
 9. [Free-Tier Quotas & Security Guarantees](#9-free-tier-quotas--security-guarantees)
 
 ---
@@ -150,18 +150,23 @@ Restart `npm run dev` so Vite picks up the new environment variables. (Keep `.en
 3. Add each variable (`VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID`, and optionally `VITE_FIREBASE_APP_CHECK_SITE_KEY`) under **Production** (and **Preview** if desired).
 4. **Trigger a new deployment** (Vite embeds `VITE_*` variables at build time, so existing builds do not pick up newly added variables until redeployed).
 
-> **CSP Headers Ready:** [`public/_headers`](./public/_headers) already configures a production `Content-Security-Policy` allowing Scryfall artwork (`cards.scryfall.io`), Firebase Auth/Firestore endpoints, Google OAuth popups/frames, and optional reCAPTCHA App Check while avoiding `Cross-Origin-Embedder-Policy: require-corp` so card artwork loads normally.
+> **CSP Headers Ready:** [`public/_headers`](./public/_headers) already configures a production `Content-Security-Policy` allowing Scryfall artwork (`cards.scryfall.io`), Firebase Auth/Firestore endpoints, Google OAuth popups/frames, and optional Fraud Defense (reCAPTCHA Enterprise) App Check while avoiding `Cross-Origin-Embedder-Policy: require-corp` so card artwork loads normally.
 
 ---
 
-## 8. (Optional) Enable Firebase App Check
+## 8. (Optional) Enable Firebase App Check (Fraud Defense / reCAPTCHA Enterprise)
 
-To add extra protection against automated abuse or script scraping against your Spark quota:
+To add extra protection against automated abuse or script scraping against your Spark quota using Google Cloud **Fraud Defense** (reCAPTCHA Enterprise — which replaces deprecated reCAPTCHA Classic):
 
-1. Create a free **reCAPTCHA v3** site key in the [Google reCAPTCHA Admin Console](https://www.google.com/recaptcha/admin) for your `*.pages.dev` / custom domain and `localhost`.
-2. In Firebase Console → **Build → App Check**, register your web app with **reCAPTCHA v3** and paste the secret key.
-3. Add the public reCAPTCHA site key to `VITE_FIREBASE_APP_CHECK_SITE_KEY` in `.env.local` and Cloudflare Pages environment variables.
-4. Once verified in App Check metrics, you can optionally toggle **Enforce** for Cloud Firestore and Authentication.
+1. Open [Google Cloud Console → Fraud Defense / reCAPTCHA](https://console.cloud.google.com/security/recaptcha), select your Firebase project (`<your-project-id>`), and enable the **reCAPTCHA Enterprise API** if prompted.
+2. Click **Create key**, select **Web**, leave checkbox challenges disabled (**score-based** key required), and add your **production** domain(s) (e.g., `mtg-deck-builder-ultra.pages.dev` and any custom domain — **do not** add `localhost` to a production key). Copy the generated **Site Key**.
+   - *Free Spark allowance:* No billing account is required on Spark; Google includes **10,000 assessments/month free** (returning `429` rather than billing if exceeded on Spark).
+3. In Firebase Console → **Build → App Check → Apps**, click your web app, expand **Fraud Defense (formerly known as reCAPTCHA Enterprise)**, paste the **reCAPTCHA Enterprise site key**, set **Token time to live (TTL)** (e.g., `4`–`24` hours to keep assessment counts minimal since tokens refresh around 50% of TTL), and click **Save**.
+4. Add `VITE_FIREBASE_APP_CHECK_SITE_KEY=<your-enterprise-site-key>` in Cloudflare Pages (**Settings → Environment variables** under Production/Preview) and trigger a new Cloudflare Pages deployment.
+5. **For local development on `localhost` (only needed if you enforce App Check or test App Check locally):**
+   - Add `VITE_FIREBASE_APP_CHECK_SITE_KEY=<your-enterprise-site-key>` and `VITE_FIREBASE_APP_CHECK_DEBUG_TOKEN=true` to `.env.local` (never set `VITE_FIREBASE_APP_CHECK_DEBUG_TOKEN` in Cloudflare Pages).
+   - Run `npm run dev`, open browser DevTools Console, copy the printed `App Check debug token: <uuid>`, and register it in Firebase Console → **Build → App Check → Apps → `...` → Manage debug tokens**.
+6. Once verified in App Check metrics (**APIs** tab), you can optionally toggle **Enforce** for Cloud Firestore and Authentication.
 
 ---
 
@@ -192,4 +197,4 @@ To add extra protection against automated abuse or script scraping against your 
 - **Immutable Handle Claims & Reserved Names:** Handles (`/handles/{handleLower}`) enforce lowercase uniqueness (`^[a-z0-9_-]{3,24}$`), block reserved names (`admin`, `system`, `support`, `moderator`, `wizards`, `official`), and cannot be hijacked or enumerated via `list`.
 - **Mutual Friend Verification:** Friend-only decks and `/friendCatalogs/{uid}` verify an `accepted` friendship document at deterministic ID `pairId(uidA, uidB)` before allowing access, and only the *recipient* of a pending request can transition `pending -> accepted`.
 - **Schema & Size Guardrails:** Every write validates field whitelists, visibility enums (`private`, `friends`, `link`, `public`), bounded array/map counts, and UTF-8 string byte caps, with a bottom catch-all `allow read, write: if false;` rule denying all unmapped paths.
-- **Recommended Production Bot & Quota Protection:** For public or high-traffic deployments, configure and **Enforce** **Firebase App Check (reCAPTCHA v3)** on Cloud Firestore and Firebase Authentication (see Section 8) so automated scripts cannot drain your Spark daily read/write quotas.
+- **Recommended Production Bot & Quota Protection:** For public or high-traffic deployments, configure and **Enforce** **Firebase App Check (Fraud Defense / reCAPTCHA Enterprise)** on Cloud Firestore and Firebase Authentication (see Section 8) so automated scripts cannot drain your Spark daily read/write quotas.

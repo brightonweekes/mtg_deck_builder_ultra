@@ -1,5 +1,9 @@
 import { getApps, initializeApp, type FirebaseApp, type FirebaseOptions } from 'firebase/app';
-import { initializeAppCheck, ReCaptchaV3Provider, type AppCheck } from 'firebase/app-check';
+import {
+  initializeAppCheck,
+  ReCaptchaEnterpriseProvider,
+  type AppCheck,
+} from 'firebase/app-check';
 import { getAuth, type Auth } from 'firebase/auth';
 import { getFirestore, initializeFirestore, type Firestore } from 'firebase/firestore';
 
@@ -11,6 +15,7 @@ interface FirebaseEnvConfig {
   messagingSenderId: string;
   storageBucket: string;
   appCheckSiteKey: string;
+  appCheckDebugToken: string;
 }
 
 let cachedSignature: string | null = null;
@@ -34,6 +39,7 @@ function readFirebaseEnvConfig(): FirebaseEnvConfig {
     messagingSenderId: trimEnv(env?.VITE_FIREBASE_MESSAGING_SENDER_ID),
     storageBucket: trimEnv(env?.VITE_FIREBASE_STORAGE_BUCKET),
     appCheckSiteKey: trimEnv(env?.VITE_FIREBASE_APP_CHECK_SITE_KEY),
+    appCheckDebugToken: trimEnv(env?.VITE_FIREBASE_APP_CHECK_DEBUG_TOKEN),
   };
 }
 
@@ -50,14 +56,36 @@ function clearCachedInstances(): void {
   appCheckAttempted = false;
 }
 
-function ensureAppCheck(app: FirebaseApp, siteKey: string): void {
+function applyDevAppCheckDebugToken(debugToken: string): void {
+  if (!debugToken || typeof window === 'undefined') {
+    return;
+  }
+  const env = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : undefined;
+  const isDev = env?.DEV === true && env?.PROD !== true && String(env?.PROD) !== 'true';
+  if (!isDev) {
+    return;
+  }
+  const hostname = window.location?.hostname;
+  if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+    return;
+  }
+  const target = (typeof self !== 'undefined' ? self : window) as unknown as Record<
+    string,
+    unknown
+  >;
+  target.FIREBASE_APPCHECK_DEBUG_TOKEN =
+    debugToken.toLowerCase() === 'true' ? true : debugToken;
+}
+
+function ensureAppCheck(app: FirebaseApp, siteKey: string, debugToken: string): void {
   if (!siteKey || typeof window === 'undefined' || appCheckAttempted) {
     return;
   }
   appCheckAttempted = true;
+  applyDevAppCheckDebugToken(debugToken);
   try {
     cachedAppCheck = initializeAppCheck(app, {
-      provider: new ReCaptchaV3Provider(siteKey),
+      provider: new ReCaptchaEnterpriseProvider(siteKey),
       isTokenAutoRefreshEnabled: true,
     });
   } catch {
@@ -84,7 +112,7 @@ export function getFirebaseApp(): FirebaseApp | null {
 
   const signature = buildConfigSignature(env);
   if (cachedApp && cachedSignature === signature) {
-    ensureAppCheck(cachedApp, env.appCheckSiteKey);
+    ensureAppCheck(cachedApp, env.appCheckSiteKey, env.appCheckDebugToken);
     return cachedApp;
   }
 
@@ -104,7 +132,7 @@ export function getFirebaseApp(): FirebaseApp | null {
   const existingApps = getApps();
   cachedApp = existingApps.length > 0 ? existingApps[0]! : initializeApp(options);
   cachedSignature = signature;
-  ensureAppCheck(cachedApp, env.appCheckSiteKey);
+  ensureAppCheck(cachedApp, env.appCheckSiteKey, env.appCheckDebugToken);
   return cachedApp;
 }
 
