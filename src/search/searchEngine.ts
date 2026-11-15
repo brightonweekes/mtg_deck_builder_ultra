@@ -458,6 +458,7 @@ const CANONICAL_BASIC_LAND_NAMES = new Set([
 export class CardSearchEngine {
   private readonly prepared: PreparedCard[];
   private readonly cardById: Map<string, CompactCard>;
+  private readonly cardByOracleId: Map<string, CompactCard>;
   private readonly basicLandsByName: Record<string, CompactCard>;
   private readonly isPreSortedByEdhrec: boolean;
   private cardByName: Map<string, CompactCard> | null = null;
@@ -467,6 +468,7 @@ export class CardSearchEngine {
     const len = cards.length;
     this.prepared = new Array<PreparedCard>(len);
     this.cardById = new Map<string, CompactCard>();
+    this.cardByOracleId = new Map<string, CompactCard>();
     this.basicLandsByName = {};
     let preSorted = true;
 
@@ -495,6 +497,9 @@ export class CardSearchEngine {
       };
 
       this.cardById.set(card.id, card);
+      if (card.oracleId && !this.cardByOracleId.has(card.oracleId)) {
+        this.cardByOracleId.set(card.oracleId, card);
+      }
       if (
         card.maxCopies === null &&
         CANONICAL_BASIC_LAND_NAMES.has(card.name) &&
@@ -533,10 +538,14 @@ export class CardSearchEngine {
     return this.prepared.length;
   }
 
+  private resolveCardByIdOrOracleId(id: string): CompactCard | undefined {
+    return this.cardById.get(id) ?? this.cardByOracleId.get(id);
+  }
+
   getCardsByIds(ids: readonly string[]): CompactCard[] {
     const out: CompactCard[] = [];
     for (const id of ids) {
-      const card = this.cardById.get(id);
+      const card = this.resolveCardByIdOrOracleId(id);
       if (card) out.push(card);
     }
     return out;
@@ -545,8 +554,19 @@ export class CardSearchEngine {
   getCardsByIdMap(ids: readonly string[]): Record<string, CompactCard> {
     const out: Record<string, CompactCard> = {};
     for (const id of ids) {
-      const card = this.cardById.get(id);
+      const card = this.resolveCardByIdOrOracleId(id);
       if (card) out[id] = card;
+    }
+    return out;
+  }
+
+  getOracleIdMap(ids: readonly string[]): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const id of ids) {
+      const card = this.resolveCardByIdOrOracleId(id);
+      if (card?.oracleId) {
+        out[id] = card.oracleId;
+      }
     }
     return out;
   }

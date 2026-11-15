@@ -364,4 +364,60 @@ describe('CardSearchEngine against real 31,597-card Commander catalog', () => {
       expect(card.isCommanderEligible).toBe(true);
     }
   });
+
+  it('resolves both card.id and oracleId fallback in getCardsByIdMap, getCardsByIds, and getOracleIdMap', () => {
+    const solRing = engine.getCardByName('Sol Ring')!;
+    const korvold = engine.getCardByName('Korvold, Fae-Cursed King')!;
+    expect(solRing).toBeDefined();
+    expect(korvold).toBeDefined();
+    expect(solRing.id).not.toBe(solRing.oracleId);
+    expect(korvold.id).not.toBe(korvold.oracleId);
+
+    const byIdMap = engine.getCardsByIdMap([
+      solRing.id,
+      korvold.oracleId,
+      'missing-card-id',
+    ]);
+    expect(byIdMap[solRing.id]?.name).toBe('Sol Ring');
+    expect(byIdMap[korvold.oracleId]?.name).toBe('Korvold, Fae-Cursed King');
+    expect(byIdMap['missing-card-id']).toBeUndefined();
+
+    const byIds = engine.getCardsByIds([
+      solRing.oracleId,
+      korvold.id,
+      'missing-card-id',
+    ]);
+    expect(byIds.map((c) => c.name)).toEqual([
+      'Sol Ring',
+      'Korvold, Fae-Cursed King',
+    ]);
+
+    const oracleMap = engine.getOracleIdMap([solRing.id, korvold.oracleId, 'missing']);
+    expect(oracleMap).toEqual({
+      [solRing.id]: solRing.oracleId,
+      [korvold.oracleId]: korvold.oracleId,
+    });
+
+    // Direct card.id lookup takes precedence over oracleId fallback if an ID collides
+    const firstPrinting: CompactCard = {
+      ...solRing,
+      id: 'printing-1',
+      oracleId: 'shared-oracle',
+      name: 'First Printing',
+    };
+    const secondPrinting: CompactCard = {
+      ...solRing,
+      id: 'printing-2',
+      oracleId: 'shared-oracle',
+      name: 'Second Printing',
+    };
+    const syntheticEngine = new CardSearchEngine([firstPrinting, secondPrinting]);
+
+    const syntheticMap = syntheticEngine.getCardsByIdMap(['printing-2', 'shared-oracle']);
+    expect(syntheticMap['printing-2']?.name).toBe('Second Printing');
+    expect(syntheticMap['shared-oracle']?.name).toBe('First Printing');
+    expect(
+      syntheticEngine.getCardsByIds(['shared-oracle', 'printing-2']).map((c) => c.id),
+    ).toEqual(['printing-1', 'printing-2']);
+  });
 });
