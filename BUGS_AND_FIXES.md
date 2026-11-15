@@ -9,6 +9,7 @@ This document tracks non-blocking bugs, data-pipeline quirks, and detailed solut
 | ID | Summary | Severity | Status | Primary Areas |
 | :--- | :--- | :--- | :--- | :--- |
 | **BUG-001** | High-value Reserved List & paper Commander cards missing/unpriced due to Scryfall `oracle-cards` MTGO representative printings (*Gaea's Cradle* sorts `#1` High → Low) | Medium-High | **Resolved (Fixed)** | [card-normalizer.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/scripts/lib/card-normalizer.ts), [paper-backfill.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/scripts/lib/paper-backfill.ts), [build-card-index.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/scripts/build-card-index.ts) |
+| **BUG-002** | Flaky wall-clock search latency assertions (`< 25 ms`) failing on GitHub Actions shared CI runners (`27.78 ms` / `28.29 ms` on commit `e80f155`) | Low-Medium | **Open (Deferred)** | [searchEngine.test.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/__tests__/searchEngine.test.ts), [searchEngine.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/search/searchEngine.ts), [ci.yml](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/.github/workflows/ci.yml) |
 
 ---
 
@@ -124,3 +125,39 @@ Fixed cleanly using Option A (streaming `default-cards` backfill + `.cache/paper
 2. Re-run `npm run build:cards` and inspect top cards via `npm run inspect:cards`:
    * Verify *Timetwister*, *The Tabernacle at Pendrell Vale*, *Mishra's Workshop*, *Bazaar of Baghdad*, *Mox Diamond*, and *Underground Sea* appear in `public/data/cards.min.json` with valid paper USD prices.
 3. Run `npm run typecheck && npm test && npm run build` and verify in UI that sorting **Price: High → Low** orders them above *Gaea's Cradle* as expected.
+
+---
+
+## BUG-002: Flaky Wall-Clock Search Latency Assertions (`< 25 ms`) on GitHub Actions CI Runners
+
+### Summary / Symptom
+GitHub Actions [`ci.yml`](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/.github/workflows/ci.yml) (`verify` job) failed with exit code `1` on push `e80f155` (`main`, 2026-11-15) during `npm test` (`vitest run`) because two theme/synergy search latency assertions exceeded `25 ms` by ~3 ms:
+* [`src/__tests__/searchEngine.test.ts#L63`](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/__tests__/searchEngine.test.ts#L63) — `executes complex queries across all 31,597 cards in under 25ms`: `AssertionError: expected 28.29 to be less than 25` (`themeRes.executionTimeMs`).
+* [`src/__tests__/searchEngine.test.ts#L286`](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/__tests__/searchEngine.test.ts#L286) — `integrates getCompatiblePartnerFilter and buildCommanderSynergyQuery against the real catalog`: `AssertionError: expected 27.78 to be less than 25` (`synergyRes.executionTimeMs`).
+
+*(Note: Unrelated to Firebase / Fraud Defense App Check, and does not block Cloudflare Pages deployments, which run `npm run build` directly. The same CI run also showed a non-blocking Node 20 deprecation warning for `actions/checkout@v4` / `actions/setup-node@v4` and an informational `ubuntu-latest` → Ubuntu 26 migration notice for October 19, 2026.)*
+
+### Root Cause Analysis
+
+#### 1. Strict Wall-Clock Thresholds Under Shared CI CPU Contention
+In [searchEngine.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/search/searchEngine.ts#L1035), `executionTimeMs` measures raw wall-clock duration via `performance.now()`. [searchEngine.test.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/__tests__/searchEngine.test.ts) asserts `executionTimeMs < 25` on five single-shot queries (lines `41`, `54`, `63`, `286`, `362`) and `indexBuildTimeMs < 100` (line `35`).
+
+While these queries comfortably pass well under `25 ms` locally, `vitest run` executes all 13 test files concurrently across worker processes on GitHub's shared `ubuntu-latest` runners. CPU scheduling jitter, concurrent test files (`cardDb.test.ts`, `pipeline.test.ts`, `deployment.test.ts`, etc.), and initial V8 JIT warmup push single-run `themeQuery` / `synergy` measurements into the `27–29 ms` range.
+
+#### 2. Expanded Real Catalog Size Since BUG-001
+After resolving **BUG-001**, `public/data/cards.min.json` grew from `31,597` to **`32,643`** cards (+1,046 cards, ~3.3% larger), slightly increasing worst-case query/sort work on the real catalog without updating the fixed `25 ms` CI threshold (or the test suite description).
+
+### Proposed Detailed Solution (For Future Implementation)
+
+1. **Eliminate CI Flakiness in [searchEngine.test.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/__tests__/searchEngine.test.ts):**
+   * Run a warmup search call in `beforeAll` (or measure the minimum/median of a small batch such as 3–5 runs) so V8 JIT warmup and one-off GC/scheduler pauses do not fail a single sample.
+   * Use a CI-aware ceiling (e.g., `const MAX_QUERY_MS = process.env.CI ? 50 : 25;`) so local runs keep the strict `< 25 ms` target while shared GitHub Actions runners tolerate normal VM noise without false failures.
+2. **Keep Performance Benchmarks Isolated (Optional):**
+   * Move strict micro-benchmark regression checks into a dedicated non-parallel script (`vitest bench` or `--no-file-parallelism`) rather than running wall-clock assertions concurrently with I/O-heavy tests.
+3. **CI Action Maintenance (Optional, Non-Blocking):**
+   * Update `actions/checkout` and `actions/setup-node` in [ci.yml](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/.github/workflows/ci.yml) and [update-cards.yml](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/.github/workflows/update-cards.yml) to Node 24-native major versions to clear the Node 20 deprecation warning.
+
+### Verification Plan (Pending)
+1. Apply the warmup / CI threshold update in `src/__tests__/searchEngine.test.ts`.
+2. Run `npm run typecheck && npm test && npm run build` locally.
+3. Push to `main` and verify the GitHub Actions [`ci.yml`](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/.github/workflows/ci.yml) `verify` job completes with exit code `0`.
