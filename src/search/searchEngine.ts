@@ -17,14 +17,6 @@ import type {
   SearchResponsePayload,
 } from '../types/search.js';
 
-const COLOR_BIT: Record<ManaColor, number> = {
-  W: 1 << 0,
-  U: 1 << 1,
-  B: 1 << 2,
-  R: 1 << 3,
-  G: 1 << 4,
-};
-
 const ROLE_BIT: Record<FunctionalRole, number> = Object.fromEntries(
   FUNCTIONAL_ROLES.map((role, index) => [role, 1 << index]),
 ) as Record<FunctionalRole, number>;
@@ -33,6 +25,29 @@ const CARD_TYPE_BIT: Record<string, number> = Object.fromEntries(
   CARD_TYPE_OPTIONS.map((typeName, index) => [typeName.toLowerCase(), 1 << index]),
 );
 
+interface TypeWordEntry {
+  lower: string;
+  firstChar: number;
+  bit: number;
+}
+
+const MAX_TYPE_WORD_LEN = CARD_TYPE_OPTIONS.reduce(
+  (max, typeName) => Math.max(max, typeName.length),
+  0,
+);
+const TYPE_WORD_BUCKETS: TypeWordEntry[][] = Array.from(
+  { length: MAX_TYPE_WORD_LEN + 1 },
+  () => [],
+);
+for (let i = 0; i < CARD_TYPE_OPTIONS.length; i++) {
+  const lower = CARD_TYPE_OPTIONS[i]!.toLowerCase();
+  TYPE_WORD_BUCKETS[lower.length]!.push({
+    lower,
+    firstChar: lower.charCodeAt(0),
+    bit: 1 << i,
+  });
+}
+
 // Pack all known theme IDs into two 30-bit integers (supports up to 60 themes with zero Set allocations)
 const THEME_INDEX_MAP = new Map<string, number>(
   THEME_METADATA.map((theme, index) => [theme.id, index]),
@@ -40,26 +55,50 @@ const THEME_INDEX_MAP = new Map<string, number>(
 const ALL_KNOWN_THEME_IDS = new Set(THEME_METADATA.map((t) => t.id));
 
 export function colorArrayToMask(colors: readonly ManaColor[]): number {
+  const len = colors.length;
+  if (len === 0) return 0;
   let mask = 0;
-  for (let i = 0; i < colors.length; i++) {
-    mask |= COLOR_BIT[colors[i]!] ?? 0;
+  for (let i = 0; i < len; i++) {
+    switch (colors[i]) {
+      case 'W':
+        mask |= 1 << 0;
+        break;
+      case 'U':
+        mask |= 1 << 1;
+        break;
+      case 'B':
+        mask |= 1 << 2;
+        break;
+      case 'R':
+        mask |= 1 << 3;
+        break;
+      case 'G':
+        mask |= 1 << 4;
+        break;
+    }
   }
   return mask;
 }
 
 function encodeRolesMask(roles: readonly FunctionalRole[]): number {
+  const len = roles.length;
+  if (len === 0) return 0;
   let mask = 0;
-  for (let i = 0; i < roles.length; i++) {
+  for (let i = 0; i < len; i++) {
     mask |= ROLE_BIT[roles[i]!] ?? 0;
   }
   return mask;
 }
 
-function encodeThemesMask(themes: readonly string[]): {
+interface EncodedThemes {
   lo: number;
   hi: number;
   extra: string[] | null;
-} {
+}
+
+const THEME_SCRATCH: EncodedThemes = { lo: 0, hi: 0, extra: null };
+
+function encodeThemesInto(themes: readonly string[], out: EncodedThemes): void {
   let lo = 0;
   let hi = 0;
   let extra: string[] | null = null;
@@ -80,7 +119,17 @@ function encodeThemesMask(themes: readonly string[]): {
     }
   }
 
-  return { lo, hi, extra };
+  out.lo = lo;
+  out.hi = hi;
+  out.extra = extra;
+}
+
+function encodeThemesMask(themes: readonly string[]): EncodedThemes {
+  const out: EncodedThemes = { lo: 0, hi: 0, extra: null };
+  if (themes.length > 0) {
+    encodeThemesInto(themes, out);
+  }
+  return out;
 }
 
 interface ThemeTermCheck {
@@ -184,64 +233,100 @@ function prepareThemeMatcher(intent: ParsedThemeIntent | null): PreparedThemeMat
   };
 }
 
-function matchesThemeCheck(item: PreparedCard, check: ThemeTermCheck): boolean {
-  if (check.loMask !== 0 && (item.themeMaskLo & check.loMask) !== 0) return true;
-  if (check.hiMask !== 0 && (item.themeMaskHi & check.hiMask) !== 0) return true;
+function matchesThemeCheck(
+  themeMaskLo: number,
+  themeMaskHi: number,
+  extraThemes: string[] | null,
+  check: ThemeTermCheck,
+): boolean {
+  if (check.loMask !== 0 && (themeMaskLo & check.loMask) !== 0) return true;
+  if (check.hiMask !== 0 && (themeMaskHi & check.hiMask) !== 0) return true;
   return (
     check.extraId !== null &&
-    item.extraThemes !== null &&
-    item.extraThemes.includes(check.extraId)
+    extraThemes !== null &&
+    extraThemes.includes(check.extraId)
   );
 }
 
-function addTypeWordsToMask(leftSideLower: string): number {
+function addTypeWordsToMask(typeLineLower: string, startPos: number, endPos: number): number {
   let typeMask = 0;
-  let start = 0;
-  const len = leftSideLower.length;
-  while (start < len) {
-    while (start < len && leftSideLower.charCodeAt(start) <= 32) start++;
-    if (start >= len) break;
-    let end = start;
-    while (end < len && leftSideLower.charCodeAt(end) > 32) end++;
-    const word = leftSideLower.slice(start, end);
-    const bit = CARD_TYPE_BIT[word];
-    if (bit) typeMask |= bit;
-    start = end + 1;
+  let i = startPos;
+  while (i < endPos) {
+    while (i < endPos && typeLineLower.charCodeAt(i) <= 32) i++;
+    if (i >= endPos) break;
+    let end = i + 1;
+    while (end < endPos && typeLineLower.charCodeAt(end) > 32) end++;
+    const wordLen = end - i;
+    if (wordLen <= MAX_TYPE_WORD_LEN) {
+      const bucket = TYPE_WORD_BUCKETS[wordLen]!;
+      if (bucket.length > 0) {
+        const firstChar = typeLineLower.charCodeAt(i);
+        for (let b = 0; b < bucket.length; b++) {
+          const entry = bucket[b]!;
+          if (entry.firstChar === firstChar && typeLineLower.startsWith(entry.lower, i)) {
+            typeMask |= entry.bit;
+            break;
+          }
+        }
+      }
+    }
+    i = end + 1;
   }
   return typeMask;
 }
 
-function extractTypeMaskAndSubtypes(typeLineLower: string): {
+function trimSlice(str: string, start: number, end: number): string {
+  while (start < end && str.charCodeAt(start) <= 32) start++;
+  while (end > start && str.charCodeAt(end - 1) <= 32) end--;
+  if (start >= end) return '';
+  const slice = str.slice(start, end);
+  return str.charCodeAt(start) > 127 || str.charCodeAt(end - 1) > 127
+    ? slice.trim()
+    : slice;
+}
+
+interface ParsedTypeLine {
+  typeLineLower: string;
   typeMask: number;
   subtypesLower: string;
-} {
-  const splitIdx = typeLineLower.indexOf(' // ');
-  if (splitIdx < 0) {
-    const dashIdx = typeLineLower.indexOf('—');
-    if (dashIdx < 0) {
-      return { typeMask: addTypeWordsToMask(typeLineLower), subtypesLower: '' };
-    }
-    return {
-      typeMask: addTypeWordsToMask(typeLineLower.slice(0, dashIdx)),
-      subtypesLower: typeLineLower.slice(dashIdx + 1).trim(),
-    };
-  }
+}
 
+// MTG's ~32.6k cards share ~4.1k distinct type lines; memoizing avoids redundant lowercasing and parsing.
+const MAX_TYPE_LINE_CACHE_SIZE = 8192;
+const TYPE_LINE_CACHE = new Map<string, ParsedTypeLine>();
+
+function parseTypeLine(typeLine: string): ParsedTypeLine {
+  const cached = TYPE_LINE_CACHE.get(typeLine);
+  if (cached !== undefined) return cached;
+
+  const typeLineLower = typeLine.toLowerCase();
+  const tLen = typeLineLower.length;
   let typeMask = 0;
   let subtypesLower = '';
-  const faces = typeLineLower.split(' // ');
-  for (let i = 0; i < faces.length; i++) {
-    const face = faces[i]!;
-    const dashIdx = face.indexOf('—');
-    if (dashIdx < 0) {
-      typeMask |= addTypeWordsToMask(face);
+  let faceStart = 0;
+  let nextSplit = typeLineLower.indexOf(' // ');
+
+  while (true) {
+    const faceEnd = nextSplit < 0 ? tLen : nextSplit;
+    const dashIdx = typeLineLower.indexOf('—', faceStart);
+    if (dashIdx < 0 || dashIdx >= faceEnd) {
+      typeMask |= addTypeWordsToMask(typeLineLower, faceStart, faceEnd);
     } else {
-      typeMask |= addTypeWordsToMask(face.slice(0, dashIdx));
-      const sub = face.slice(dashIdx + 1).trim();
+      typeMask |= addTypeWordsToMask(typeLineLower, faceStart, dashIdx);
+      const sub = trimSlice(typeLineLower, dashIdx + 1, faceEnd);
       if (sub) subtypesLower = subtypesLower ? `${subtypesLower} ${sub}` : sub;
     }
+    if (nextSplit < 0) break;
+    faceStart = nextSplit + 4;
+    nextSplit = typeLineLower.indexOf(' // ', faceStart);
   }
-  return { typeMask, subtypesLower };
+
+  const parsed: ParsedTypeLine = { typeLineLower, typeMask, subtypesLower };
+  if (TYPE_LINE_CACHE.size >= MAX_TYPE_LINE_CACHE_SIZE) {
+    TYPE_LINE_CACHE.clear();
+  }
+  TYPE_LINE_CACHE.set(typeLine, parsed);
+  return parsed;
 }
 
 export function parseSearchQuery(query: string): string[] {
@@ -364,21 +449,6 @@ export function parseThemeIntent(
   };
 }
 
-interface PreparedCard {
-  card: CompactCard;
-  colorMask: number;
-  ciMask: number;
-  typeMask: number;
-  roleMask: number;
-  themeMaskLo: number;
-  themeMaskHi: number;
-  extraThemes: string[] | null;
-  nameLower: string;
-  typeLineLower: string;
-  subtypesLower: string;
-  oracleLower: string;
-}
-
 function compareEdhrec(a: CompactCard, b: CompactCard): number {
   if (a.edhrecRank !== null && b.edhrecRank !== null) {
     if (a.edhrecRank !== b.edhrecRank) return a.edhrecRank - b.edhrecRank;
@@ -456,7 +526,18 @@ const CANONICAL_BASIC_LAND_NAMES = new Set([
  * High-speed in-memory search, filter, and Method A synergy scoring engine.
  */
 export class CardSearchEngine {
-  private readonly prepared: PreparedCard[];
+  private readonly cards: readonly CompactCard[];
+  private readonly colorMasks: Uint8Array;
+  private readonly ciMasks: Uint8Array;
+  private readonly typeMasks: Uint32Array;
+  private readonly roleMasks: Uint32Array;
+  private readonly themeMaskLos: Int32Array;
+  private readonly themeMaskHis: Int32Array;
+  private readonly extraThemesByIndex: Map<number, string[]> | null;
+  private readonly nameLowers: string[];
+  private readonly typeLineLowers: string[];
+  private readonly subtypesLowers: string[];
+  private readonly oracleLowers: string[];
   private readonly cardById: Map<string, CompactCard>;
   private readonly basicLandsByName: Record<string, CompactCard>;
   private readonly isPreSortedByEdhrec: boolean;
@@ -466,44 +547,104 @@ export class CardSearchEngine {
 
   constructor(cards: readonly CompactCard[]) {
     const len = cards.length;
-    this.prepared = new Array<PreparedCard>(len);
-    this.cardById = new Map<string, CompactCard>();
-    this.basicLandsByName = {};
+    const indexedCards = cards.slice();
+    const colorMasks = new Uint8Array(len);
+    const ciMasks = new Uint8Array(len);
+    const typeMasks = new Uint32Array(len);
+    const roleMasks = new Uint32Array(len);
+    const themeMaskLos = new Int32Array(len);
+    const themeMaskHis = new Int32Array(len);
+    const nameLowers = new Array<string>(len);
+    const typeLineLowers = new Array<string>(len);
+    const subtypesLowers = new Array<string>(len);
+    const oracleLowers = new Array<string>(len);
+    let extraThemesByIndex: Map<number, string[]> | null = null;
+    const cardById = new Map<string, CompactCard>();
+    const basicLandsByName: Record<string, CompactCard> = {};
     let preSorted = true;
+    let prevRank: number | null = null;
+    let prevName = '';
 
     for (let i = 0; i < len; i++) {
-      const card = cards[i]!;
-      if (preSorted && i > 0 && compareEdhrec(cards[i - 1]!, card) > 0) {
-        preSorted = false;
+      const card = indexedCards[i]!;
+      const name = card.name;
+
+      // Equivalent to compareEdhrec(cards[i - 1], card) > 0 without re-reading cards[i - 1]
+      if (preSorted) {
+        const rank = card.edhrecRank;
+        if (i > 0) {
+          if (rank !== null) {
+            if (prevRank === null || prevRank > rank || (prevRank === rank && prevName > name)) {
+              preSorted = false;
+            }
+          } else if (prevRank === null && prevName > name) {
+            preSorted = false;
+          }
+        }
+        prevRank = rank;
+        prevName = name;
       }
-      const typeLineLower = card.typeLine.toLowerCase();
-      const { typeMask, subtypesLower } = extractTypeMaskAndSubtypes(typeLineLower);
-      const themeEncoded = encodeThemesMask(card.themes);
 
-      this.prepared[i] = {
-        card,
-        colorMask: colorArrayToMask(card.colors),
-        ciMask: colorArrayToMask(card.colorIdentity),
-        typeMask,
-        roleMask: encodeRolesMask(card.roles),
-        themeMaskLo: themeEncoded.lo,
-        themeMaskHi: themeEncoded.hi,
-        extraThemes: themeEncoded.extra,
-        nameLower: card.name.toLowerCase(),
-        typeLineLower,
-        subtypesLower,
-        oracleLower: card.oracleText.toLowerCase(),
-      };
+      const parsedType = parseTypeLine(card.typeLine);
+      typeMasks[i] = parsedType.typeMask;
+      typeLineLowers[i] = parsedType.typeLineLower;
+      subtypesLowers[i] = parsedType.subtypesLower;
 
-      this.cardById.set(card.id, card);
+      const colors = card.colors;
+      if (colors.length > 0) {
+        colorMasks[i] = colorArrayToMask(colors);
+      }
+
+      const colorIdentity = card.colorIdentity;
+      if (colorIdentity.length > 0) {
+        ciMasks[i] = colorArrayToMask(colorIdentity);
+      }
+
+      const roles = card.roles;
+      if (roles.length > 0) {
+        roleMasks[i] = encodeRolesMask(roles);
+      }
+
+      const themes = card.themes;
+      if (themes.length > 0) {
+        encodeThemesInto(themes, THEME_SCRATCH);
+        themeMaskLos[i] = THEME_SCRATCH.lo;
+        themeMaskHis[i] = THEME_SCRATCH.hi;
+        if (THEME_SCRATCH.extra !== null) {
+          if (!extraThemesByIndex) extraThemesByIndex = new Map<number, string[]>();
+          extraThemesByIndex.set(i, THEME_SCRATCH.extra);
+          THEME_SCRATCH.extra = null;
+        }
+      }
+
+      nameLowers[i] = name.toLowerCase();
+      const oracleText = card.oracleText;
+      oracleLowers[i] = oracleText.length === 0 ? '' : oracleText.toLowerCase();
+
+      cardById.set(card.id, card);
       if (
         card.maxCopies === null &&
-        CANONICAL_BASIC_LAND_NAMES.has(card.name) &&
-        !this.basicLandsByName[card.name]
+        CANONICAL_BASIC_LAND_NAMES.has(name) &&
+        !basicLandsByName[name]
       ) {
-        this.basicLandsByName[card.name] = card;
+        basicLandsByName[name] = card;
       }
     }
+
+    this.cards = indexedCards;
+    this.colorMasks = colorMasks;
+    this.ciMasks = ciMasks;
+    this.typeMasks = typeMasks;
+    this.roleMasks = roleMasks;
+    this.themeMaskLos = themeMaskLos;
+    this.themeMaskHis = themeMaskHis;
+    this.extraThemesByIndex = extraThemesByIndex;
+    this.nameLowers = nameLowers;
+    this.typeLineLowers = typeLineLowers;
+    this.subtypesLowers = subtypesLowers;
+    this.oracleLowers = oracleLowers;
+    this.cardById = cardById;
+    this.basicLandsByName = basicLandsByName;
     this.isPreSortedByEdhrec = preSorted;
   }
 
@@ -511,8 +652,8 @@ export class CardSearchEngine {
     if (this.cardByOracleId) return this.cardByOracleId;
     const byOracleId = new Map<string, CompactCard>();
 
-    for (let i = 0; i < this.prepared.length; i++) {
-      const card = this.prepared[i]!.card;
+    for (let i = 0; i < this.cards.length; i++) {
+      const card = this.cards[i]!;
       if (card.oracleId && !byOracleId.has(card.oracleId)) {
         byOracleId.set(card.oracleId, card);
       }
@@ -527,16 +668,17 @@ export class CardSearchEngine {
     const byName = new Map<string, CompactCard>();
     const frontByName = new Map<string, CompactCard>();
 
-    for (let i = 0; i < this.prepared.length; i++) {
-      const item = this.prepared[i]!;
-      if (!byName.has(item.nameLower)) {
-        byName.set(item.nameLower, item.card);
+    for (let i = 0; i < this.cards.length; i++) {
+      const card = this.cards[i]!;
+      const nameLower = this.nameLowers[i]!;
+      if (!byName.has(nameLower)) {
+        byName.set(nameLower, card);
       }
-      const splitIdx = item.nameLower.indexOf(' // ');
+      const splitIdx = nameLower.indexOf(' // ');
       if (splitIdx > 0) {
-        const frontLower = item.nameLower.slice(0, splitIdx).trim();
+        const frontLower = nameLower.slice(0, splitIdx).trim();
         if (frontLower && !frontByName.has(frontLower)) {
-          frontByName.set(frontLower, item.card);
+          frontByName.set(frontLower, card);
         }
       }
     }
@@ -546,7 +688,7 @@ export class CardSearchEngine {
   }
 
   get totalCount(): number {
-    return this.prepared.length;
+    return this.cards.length;
   }
 
   private resolveCardByIdOrOracleId(id: string): CompactCard | undefined {
@@ -653,33 +795,46 @@ export class CardSearchEngine {
       filter.sortBy === 'synergy' || (hasThemeQuery && filter.sortBy === 'edhrec');
 
     const matches: ScoredCardMatch[] = [];
+    const cards = this.cards;
+    const colorMasks = this.colorMasks;
+    const ciMasks = this.ciMasks;
+    const typeMasks = this.typeMasks;
+    const roleMasks = this.roleMasks;
+    const themeMaskLos = this.themeMaskLos;
+    const themeMaskHis = this.themeMaskHis;
+    const extraThemesByIndex = this.extraThemesByIndex;
+    const nameLowers = this.nameLowers;
+    const typeLineLowers = this.typeLineLowers;
+    const subtypesLowers = this.subtypesLowers;
+    const oracleLowers = this.oracleLowers;
 
-    for (let i = 0; i < this.prepared.length; i++) {
-      const item = this.prepared[i]!;
-      const card = item.card;
+    for (let i = 0; i < cards.length; i++) {
+      const card = cards[i]!;
 
       // 1. Fast boolean & bitwise filters
       if (filter.commanderOnly && !card.isCommanderEligible) continue;
       if (filter.partnerType !== null && card.partnerType !== filter.partnerType) continue;
 
-      if (hasCiLock && (item.ciMask & ~allowedCiMask) !== 0) continue;
+      const ciMask = ciMasks[i]!;
+      if (hasCiLock && (ciMask & ~allowedCiMask) !== 0) continue;
 
+      const colorMask = colorMasks[i]!;
       if (filter.colorlessOnly) {
-        if (item.colorMask !== 0) continue;
+        if (colorMask !== 0) continue;
       } else if (hasColorFilter) {
         switch (filter.colorMatchMode) {
           case 'exact':
-            if (item.colorMask !== targetColorMask) continue;
+            if (colorMask !== targetColorMask) continue;
             break;
           case 'at-most':
-            if ((item.colorMask & ~targetColorMask) !== 0) continue;
+            if ((colorMask & ~targetColorMask) !== 0) continue;
             break;
           case 'identity-lock':
-            if ((item.ciMask & ~targetColorMask) !== 0) continue;
+            if ((ciMask & ~targetColorMask) !== 0) continue;
             break;
           case 'include':
           default:
-            if ((item.colorMask & targetColorMask) !== targetColorMask) continue;
+            if ((colorMask & targetColorMask) !== targetColorMask) continue;
             break;
         }
       }
@@ -712,24 +867,29 @@ export class CardSearchEngine {
         if (card.priceUsd === null || card.priceUsd > filter.maxPriceUsd) continue;
       }
 
-      if (wantedTypeMask !== 0 && (item.typeMask & wantedTypeMask) === 0) continue;
+      if (wantedTypeMask !== 0 && (typeMasks[i]! & wantedTypeMask) === 0) continue;
 
       // 2. Role & explicit Theme pill filters (AND semantics via bitmasks)
-      if (wantedRoleMask !== 0 && (item.roleMask & wantedRoleMask) !== wantedRoleMask) {
+      const roleMask = roleMasks[i]!;
+      if (wantedRoleMask !== 0 && (roleMask & wantedRoleMask) !== wantedRoleMask) {
         continue;
       }
 
+      const themeMaskLo = themeMaskLos[i]!;
+      const themeMaskHi = themeMaskHis[i]!;
+      const cardExtraThemes = extraThemesByIndex !== null ? (extraThemesByIndex.get(i) ?? null) : null;
+
       if (wantedThemesEncoded !== null) {
         if (
-          (item.themeMaskLo & wantedThemesEncoded.lo) !== wantedThemesEncoded.lo ||
-          (item.themeMaskHi & wantedThemesEncoded.hi) !== wantedThemesEncoded.hi
+          (themeMaskLo & wantedThemesEncoded.lo) !== wantedThemesEncoded.lo ||
+          (themeMaskHi & wantedThemesEncoded.hi) !== wantedThemesEncoded.hi
         ) {
           continue;
         }
         if (wantedThemesEncoded.extra !== null) {
           let allExtra = true;
           for (const t of wantedThemesEncoded.extra) {
-            if (!item.extraThemes || !item.extraThemes.includes(t)) {
+            if (!cardExtraThemes || !cardExtraThemes.includes(t)) {
               allExtra = false;
               break;
             }
@@ -740,9 +900,10 @@ export class CardSearchEngine {
 
       // 3. Subtype filter (OR semantics across selected subtypes)
       if (wantedSubtypes.length > 0) {
+        const subtypesLower = subtypesLowers[i]!;
         let anySubtypeMatch = false;
         for (const sub of wantedSubtypes) {
-          if (item.subtypesLower.includes(sub)) {
+          if (subtypesLower.includes(sub)) {
             anySubtypeMatch = true;
             break;
           }
@@ -752,12 +913,15 @@ export class CardSearchEngine {
 
       // 4. Text query tokens (AND across tokens, OR across name/type/oracle)
       if (queryTokens.length > 0) {
+        const nameLower = nameLowers[i]!;
+        const typeLineLower = typeLineLowers[i]!;
+        const oracleLower = oracleLowers[i]!;
         let allTokensMatch = true;
         for (const tok of queryTokens) {
           if (
-            !item.nameLower.includes(tok) &&
-            !item.typeLineLower.includes(tok) &&
-            !item.oracleLower.includes(tok)
+            !nameLower.includes(tok) &&
+            !typeLineLower.includes(tok) &&
+            !oracleLower.includes(tok)
           ) {
             allTokensMatch = false;
             break;
@@ -772,16 +936,16 @@ export class CardSearchEngine {
 
       if (themeMatcher !== null) {
         const fastBitHit =
-          (item.themeMaskLo & themeMatcher.anyThemeLo) !== 0 ||
-          (item.themeMaskHi & themeMatcher.anyThemeHi) !== 0 ||
-          (item.roleMask & themeMatcher.anyRoleMask) !== 0;
+          (themeMaskLo & themeMatcher.anyThemeLo) !== 0 ||
+          (themeMaskHi & themeMatcher.anyThemeHi) !== 0 ||
+          (roleMask & themeMatcher.anyRoleMask) !== 0;
 
         if (!fastBitHit && !themeMatcher.hasAnyExtra && !themeMatcher.hasFallback) {
           if (hasThemeQuery) continue;
         } else {
           for (let t = 0; t < themeMatcher.themeChecks.length; t++) {
             const check = themeMatcher.themeChecks[t]!;
-            if (matchesThemeCheck(item, check)) {
+            if (matchesThemeCheck(themeMaskLo, themeMaskHi, cardExtraThemes, check)) {
               synergyScore += check.weight;
               if (!matchedReasons) matchedReasons = [];
               matchedReasons.push(check.reason);
@@ -789,7 +953,7 @@ export class CardSearchEngine {
           }
           for (let r = 0; r < themeMatcher.roleChecks.length; r++) {
             const check = themeMatcher.roleChecks[r]!;
-            if ((item.roleMask & check.mask) !== 0) {
+            if ((roleMask & check.mask) !== 0) {
               synergyScore += 15;
               if (!matchedReasons) matchedReasons = [];
               matchedReasons.push(check.reason);
@@ -798,9 +962,9 @@ export class CardSearchEngine {
           for (let f = 0; f < themeMatcher.fallbackChecks.length; f++) {
             const check = themeMatcher.fallbackChecks[f]!;
             if (
-              item.typeLineLower.includes(check.term) ||
-              item.oracleLower.includes(check.term) ||
-              item.nameLower.includes(check.term)
+              typeLineLowers[i]!.includes(check.term) ||
+              oracleLowers[i]!.includes(check.term) ||
+              nameLowers[i]!.includes(check.term)
             ) {
               synergyScore += 18;
               if (!matchedReasons) matchedReasons = [];
@@ -816,13 +980,13 @@ export class CardSearchEngine {
               for (let g = 0; g < themeMatcher.groupChecks.length; g++) {
                 const group = themeMatcher.groupChecks[g]!;
                 let hit =
-                  (item.themeMaskLo & group.loMask) !== 0 ||
-                  (item.themeMaskHi & group.hiMask) !== 0 ||
-                  (item.roleMask & group.roleMask) !== 0;
+                  (themeMaskLo & group.loMask) !== 0 ||
+                  (themeMaskHi & group.hiMask) !== 0 ||
+                  (roleMask & group.roleMask) !== 0;
 
-                if (!hit && group.extraIds !== null && item.extraThemes !== null) {
+                if (!hit && group.extraIds !== null && cardExtraThemes !== null) {
                   for (let e = 0; e < group.extraIds.length; e++) {
-                    if (item.extraThemes.includes(group.extraIds[e]!)) {
+                    if (cardExtraThemes.includes(group.extraIds[e]!)) {
                       hit = true;
                       break;
                     }
@@ -830,9 +994,9 @@ export class CardSearchEngine {
                 }
                 if (!hit && group.fallbackTerm) {
                   hit =
-                    item.typeLineLower.includes(group.fallbackTerm) ||
-                    item.oracleLower.includes(group.fallbackTerm) ||
-                    item.nameLower.includes(group.fallbackTerm);
+                    typeLineLowers[i]!.includes(group.fallbackTerm) ||
+                    oracleLowers[i]!.includes(group.fallbackTerm) ||
+                    nameLowers[i]!.includes(group.fallbackTerm);
                 }
                 if (hit) groupsMatched++;
               }
