@@ -1,0 +1,516 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // -------------------------------------------------------------------------
+    // Helper Functions
+    // -------------------------------------------------------------------------
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    // Deterministic lexicographically sorted friendship pair ID: "<smallerUid>_<largerUid>"
+    function pairId(a, b) {
+      return a < b ? a + '_' + b : b + '_' + a;
+    }
+
+    function friendshipPath(uidA, uidB) {
+      return /databases/$(database)/documents/friendships/$(pairId(uidA, uidB));
+    }
+
+    function isAcceptedFriend(uidA, uidB) {
+      return uidA is string
+        && uidB is string
+        && uidA != uidB
+        && exists(friendshipPath(uidA, uidB))
+        && get(friendshipPath(uidA, uidB)).data.status == 'accepted';
+    }
+
+    function isTimestampString(value) {
+      return value is string && value.size() >= 10 && value.size() <= 40;
+    }
+
+    function isReservedHandle(handleLower) {
+      return handleLower in [
+        'admin',
+        'system',
+        'support',
+        'moderator',
+        'wizards',
+        'official'
+      ];
+    }
+
+    function isValidHandle(handle) {
+      return handle is string
+        && handle.matches('^[a-zA-Z0-9_-]{3,24}$')
+        && !isReservedHandle(handle.lower());
+    }
+
+    function isValidVisibility(visibility) {
+      return visibility in ['private', 'friends', 'link', 'public'];
+    }
+
+    function isValidProfile(uid, data) {
+      return data.keys().hasAll([
+          'uid',
+          'handle',
+          'handleLower',
+          'displayName',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'handle',
+          'handleLower',
+          'displayName',
+          'avatarCommanderId',
+          'createdAt',
+          'updatedAt'
+        ])
+        // Never allow email addresses or PII in public profile documents
+        && !('email' in data)
+        && data.uid is string
+        && data.uid == uid
+        && data.uid == request.auth.uid
+        && isValidHandle(data.handle)
+        && data.handleLower is string
+        && data.handleLower == data.handle.lower()
+        && data.handleLower.matches('^[a-z0-9_-]{3,24}$')
+        && !isReservedHandle(data.handleLower)
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 60
+        && data.displayName.toUtf8().size() <= 240
+        && (
+          !('avatarCommanderId' in data)
+          || data.avatarCommanderId == null
+          || (
+            data.avatarCommanderId is string
+            && data.avatarCommanderId.size() <= 80
+            && data.avatarCommanderId.toUtf8().size() <= 160
+          )
+        )
+        && isTimestampString(data.createdAt)
+        && isTimestampString(data.updatedAt);
+    }
+
+    function isValidFriendshipCreate(pairDocId, data) {
+      return data.keys().hasAll([
+          'users',
+          'requestedBy',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'users',
+          'requestedBy',
+          'userHandles',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ])
+        && (!('id' in data) || (data.id is string && data.id == pairDocId))
+        && data.users is list
+        && data.users.size() == 2
+        && data.users[0] is string
+        && data.users[1] is string
+        && data.users[0].size() > 0
+        && data.users[0].size() <= 128
+        && data.users[1].size() > 0
+        && data.users[1].size() <= 128
+        && data.users[0] != data.users[1]
+        && request.auth.uid in data.users
+        && data.requestedBy is string
+        && data.requestedBy == request.auth.uid
+        && data.status == 'pending'
+        && pairDocId == pairId(data.users[0], data.users[1])
+        && (
+          !('userHandles' in data)
+          || (data.userHandles is map && data.userHandles.size() <= 2)
+        )
+        && isTimestampString(data.createdAt)
+        && isTimestampString(data.updatedAt);
+    }
+
+    function isValidFriendshipAccept(pairDocId, existing, incoming) {
+      return incoming.keys().hasAll([
+          'users',
+          'requestedBy',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ])
+        && incoming.keys().hasOnly([
+          'id',
+          'users',
+          'requestedBy',
+          'userHandles',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ])
+        && (!('id' in incoming) || (incoming.id is string && incoming.id == pairDocId))
+        && existing.status == 'pending'
+        && incoming.status == 'accepted'
+        && incoming.users == existing.users
+        && incoming.requestedBy == existing.requestedBy
+        && incoming.createdAt == existing.createdAt
+        && (
+          !('userHandles' in incoming)
+          || (incoming.userHandles is map && incoming.userHandles.size() <= 2)
+        )
+        && isTimestampString(incoming.updatedAt);
+    }
+
+    function isValidFriendCatalog(ownerUid, data) {
+      return data.keys().hasAll([
+          'ownerUid',
+          'ownerHandle',
+          'updatedAt',
+          'decks'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid',
+          'ownerHandle',
+          'updatedAt',
+          'decks'
+        ])
+        && data.ownerUid is string
+        && data.ownerUid == ownerUid
+        && data.ownerHandle is string
+        && data.ownerHandle.size() <= 24
+        && data.ownerHandle.toUtf8().size() <= 96
+        && isTimestampString(data.updatedAt)
+        && data.decks is list
+        && data.decks.size() <= 200;
+    }
+
+    // Strict schema & field-size guardrails keep deck documents well under ~35 KB
+    function isValidDeckDoc(deckId, data) {
+      return data.keys().hasAll([
+          'id',
+          'ownerUid',
+          'ownerHandle',
+          'name',
+          'commanderOracleIds',
+          'colorIdentity',
+          'mainboard',
+          'sideboard',
+          'visibility',
+          'sharedWithUids',
+          'revision',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'ownerUid',
+          'ownerHandle',
+          'name',
+          'description',
+          'commanderOracleIds',
+          'colorIdentity',
+          'mainboard',
+          'sideboard',
+          'synergyThemes',
+          'cardCount',
+          'lockSearchToCommanderIdentity',
+          'visibility',
+          'sharedWithUids',
+          'revision',
+          'createdAt',
+          'updatedAt',
+          'deletedAt'
+        ])
+        && data.id is string
+        && data.id == deckId
+        && data.id.size() >= 1
+        && data.id.size() <= 128
+        && data.ownerUid is string
+        && data.ownerUid == request.auth.uid
+        && data.ownerHandle is string
+        && data.ownerHandle.size() <= 24
+        && data.ownerHandle.toUtf8().size() <= 96
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 120
+        && data.name.toUtf8().size() <= 480
+        && (
+          !('description' in data)
+          || data.description == null
+          || (
+            data.description is string
+            && data.description.size() <= 2000
+            && data.description.toUtf8().size() <= 8000
+          )
+        )
+        && data.commanderOracleIds is list
+        && data.commanderOracleIds.size() <= 2
+        && data.colorIdentity is list
+        && data.colorIdentity.size() <= 5
+        && data.mainboard is map
+        && data.mainboard.keys().size() <= 250
+        && data.sideboard is map
+        && data.sideboard.keys().size() <= 200
+        && (
+          !('synergyThemes' in data)
+          || (data.synergyThemes is list && data.synergyThemes.size() <= 20)
+        )
+        && (
+          !('cardCount' in data)
+          || (data.cardCount is int && data.cardCount >= 0 && data.cardCount <= 500)
+        )
+        && (
+          !('lockSearchToCommanderIdentity' in data)
+          || data.lockSearchToCommanderIdentity is bool
+        )
+        && isValidVisibility(data.visibility)
+        && data.sharedWithUids is list
+        && data.sharedWithUids.size() <= 50
+        && data.revision is int
+        && data.revision >= 1
+        && isTimestampString(data.createdAt)
+        && isTimestampString(data.updatedAt)
+        && (
+          !('deletedAt' in data)
+          || data.deletedAt == null
+          || isTimestampString(data.deletedAt)
+        );
+    }
+
+    function isValidCardListDoc(listId, data) {
+      return data.keys().hasAll([
+          'id',
+          'ownerUid',
+          'name',
+          'listType',
+          'entries',
+          'visibility',
+          'revision',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'ownerUid',
+          'ownerHandle',
+          'name',
+          'description',
+          'listType',
+          'entries',
+          'visibility',
+          'sharedWithUids',
+          'revision',
+          'createdAt',
+          'updatedAt',
+          'deletedAt'
+        ])
+        && data.id is string
+        && data.id == listId
+        && data.id.size() >= 1
+        && data.id.size() <= 128
+        && data.ownerUid is string
+        && data.ownerUid == request.auth.uid
+        && (
+          !('ownerHandle' in data)
+          || (
+            data.ownerHandle is string
+            && data.ownerHandle.size() <= 24
+            && data.ownerHandle.toUtf8().size() <= 96
+          )
+        )
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 120
+        && data.name.toUtf8().size() <= 480
+        && (
+          !('description' in data)
+          || data.description == null
+          || (
+            data.description is string
+            && data.description.size() <= 2000
+            && data.description.toUtf8().size() <= 8000
+          )
+        )
+        && data.listType in ['collection', 'wishlist', 'trade', 'synergy-package']
+        && data.entries is map
+        && data.entries.keys().size() <= 1000
+        && isValidVisibility(data.visibility)
+        && (
+          !('sharedWithUids' in data)
+          || (data.sharedWithUids is list && data.sharedWithUids.size() <= 50)
+        )
+        && data.revision is int
+        && data.revision >= 1
+        && isTimestampString(data.createdAt)
+        && isTimestampString(data.updatedAt)
+        && (
+          !('deletedAt' in data)
+          || data.deletedAt == null
+          || isTimestampString(data.deletedAt)
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection Rules
+    // -------------------------------------------------------------------------
+
+    // Public user profiles (strictly NO email field; readable by verified accounts)
+    match /profiles/{uid} {
+      allow get, list: if isVerified();
+      allow create, update: if isVerified()
+        && request.auth.uid == uid
+        && isValidProfile(uid, request.resource.data);
+      allow delete: if isVerified() && request.auth.uid == uid;
+    }
+
+    // Case-insensitive handle uniqueness claims
+    match /handles/{handleLower} {
+      allow get: if isSignedIn();
+      allow list: if false;
+      allow create: if isVerified()
+        && handleLower.matches('^[a-z0-9_-]{3,24}$')
+        && !isReservedHandle(handleLower)
+        && !exists(/databases/$(database)/documents/handles/$(handleLower))
+        && request.resource.data.keys().hasAll(['uid'])
+        && request.resource.data.keys().hasOnly([
+          'uid',
+          'handle',
+          'handleLower',
+          'createdAt',
+          'updatedAt'
+        ])
+        && !('email' in request.resource.data)
+        && request.resource.data.uid is string
+        && request.resource.data.uid == request.auth.uid
+        && (
+          !('handle' in request.resource.data)
+          || (
+            request.resource.data.handle is string
+            && request.resource.data.handle.lower() == handleLower
+          )
+        )
+        && (
+          !('handleLower' in request.resource.data)
+          || (
+            request.resource.data.handleLower is string
+            && request.resource.data.handleLower == handleLower
+          )
+        )
+        && (
+          !('createdAt' in request.resource.data)
+          || isTimestampString(request.resource.data.createdAt)
+        )
+        && (
+          !('updatedAt' in request.resource.data)
+          || isTimestampString(request.resource.data.updatedAt)
+        );
+      allow update: if false;
+      allow delete: if isVerified() && resource.data.uid == request.auth.uid;
+    }
+
+    // Bidirectional friend requests and accepted friendships
+    match /friendships/{pairDocId} {
+      allow get: if isVerified() && request.auth.uid in resource.data.users;
+      allow list: if isVerified() && request.auth.uid in resource.data.users;
+      allow create: if isVerified()
+        && isValidFriendshipCreate(pairDocId, request.resource.data);
+      allow update: if isVerified()
+        && request.auth.uid in resource.data.users
+        && request.auth.uid != resource.data.requestedBy
+        && isValidFriendshipAccept(pairDocId, resource.data, request.resource.data);
+      allow delete: if isVerified() && request.auth.uid in resource.data.users;
+    }
+
+    // Single summary document per user listing only friends/public deck metadata
+    match /friendCatalogs/{ownerUid} {
+      allow get: if isVerified() && (
+        request.auth.uid == ownerUid
+        || isAcceptedFriend(request.auth.uid, ownerUid)
+      );
+      allow list: if false;
+      allow create, update: if isVerified()
+        && request.auth.uid == ownerUid
+        && isValidFriendCatalog(ownerUid, request.resource.data);
+      allow delete: if isVerified() && request.auth.uid == ownerUid;
+    }
+
+    // Cloud-synced Commander decks
+    match /decks/{deckId} {
+      allow get: if resource.data.visibility in ['public', 'link']
+        || (isVerified() && resource.data.ownerUid == request.auth.uid)
+        || (
+          isVerified()
+          && 'sharedWithUids' in resource.data
+          && resource.data.sharedWithUids is list
+          && request.auth.uid in resource.data.sharedWithUids
+        )
+        || (
+          isVerified()
+          && resource.data.visibility == 'friends'
+          && isAcceptedFriend(request.auth.uid, resource.data.ownerUid)
+        );
+
+      allow list: if (isVerified() && resource.data.ownerUid == request.auth.uid)
+        || resource.data.visibility == 'public'
+        || (isVerified() && request.auth.uid in resource.data.sharedWithUids);
+
+      allow create: if isVerified()
+        && request.resource.data.ownerUid == request.auth.uid
+        && isValidDeckDoc(deckId, request.resource.data);
+
+      allow update: if isVerified()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == request.auth.uid
+        && isValidDeckDoc(deckId, request.resource.data);
+
+      allow delete: if isVerified() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // Cloud-synced collections, wishlists, trade binders, and synergy packages
+    match /cardlists/{listId} {
+      allow get: if resource.data.visibility in ['public', 'link']
+        || (isVerified() && resource.data.ownerUid == request.auth.uid)
+        || (
+          isVerified()
+          && 'sharedWithUids' in resource.data
+          && resource.data.sharedWithUids is list
+          && request.auth.uid in resource.data.sharedWithUids
+        )
+        || (
+          isVerified()
+          && resource.data.visibility == 'friends'
+          && isAcceptedFriend(request.auth.uid, resource.data.ownerUid)
+        );
+
+      allow list: if (isVerified() && resource.data.ownerUid == request.auth.uid)
+        || resource.data.visibility == 'public'
+        || (isVerified() && request.auth.uid in resource.data.sharedWithUids);
+
+      allow create: if isVerified()
+        && request.resource.data.ownerUid == request.auth.uid
+        && isValidCardListDoc(listId, request.resource.data);
+
+      allow update: if isVerified()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == request.auth.uid
+        && isValidCardListDoc(listId, request.resource.data);
+
+      allow delete: if isVerified() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // Catch-all deny rule
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
