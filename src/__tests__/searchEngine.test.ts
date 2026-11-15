@@ -419,5 +419,24 @@ describe('CardSearchEngine against real 31,597-card Commander catalog', () => {
     expect(
       syntheticEngine.getCardsByIds(['shared-oracle', 'printing-2']).map((c) => c.id),
     ).toEqual(['printing-1', 'printing-2']);
+
+    // Verify cardByOracleId stays lazy across constructor and card.id hits, building only on miss
+    const lazyEngine = new CardSearchEngine(realCards);
+    expect(
+      (lazyEngine as unknown as { cardByOracleId: Map<string, CompactCard> | null }).cardByOracleId,
+    ).toBeNull();
+    expect(lazyEngine.getCardsByIdMap([solRing.id])[solRing.id]?.name).toBe('Sol Ring');
+    expect(lazyEngine.getOracleIdMap([solRing.id])).toEqual({ [solRing.id]: solRing.oracleId });
+    expect(
+      (lazyEngine as unknown as { cardByOracleId: Map<string, CompactCard> | null }).cardByOracleId,
+    ).toBeNull();
+
+    expect(lazyEngine.getOracleIdMap([korvold.oracleId])).toEqual({
+      [korvold.oracleId]: korvold.oracleId,
+    });
+    expect(
+      (lazyEngine as unknown as { cardByOracleId: Map<string, CompactCard> | null }).cardByOracleId,
+    ).toBeInstanceOf(Map);
+    expect(lazyEngine.getCardsByIds([solRing.oracleId]).map((c) => c.name)).toEqual(['Sol Ring']);
   });
 });

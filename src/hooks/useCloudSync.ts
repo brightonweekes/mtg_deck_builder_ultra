@@ -205,6 +205,7 @@ export class CloudSyncController {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private hasPendingDebounce = false;
   private conflictDismissed = false;
+  private exportFailed = false;
   private disposed = false;
   private syncQueue: Promise<void> = Promise.resolve();
   private listeners = new Set<() => void>();
@@ -295,6 +296,9 @@ export class CloudSyncController {
   }
 
   private updateState(patch: Partial<CloudSyncSnapshot>): void {
+    if ('syncError' in patch) {
+      this.exportFailed = false;
+    }
     const nextConflicts = patch.conflicts ?? this.state.conflicts;
     const nextActiveConflict = this.conflictDismissed ? null : (nextConflicts[0] ?? null);
     this.state = {
@@ -658,20 +662,21 @@ export class CloudSyncController {
   };
 
   exportAllData = async (): Promise<AccountExportBundle> => {
-    const bundle = await this.engine.buildAccountExportBundle(this.profile);
-    if (typeof document !== 'undefined' && typeof URL.createObjectURL === 'function') {
-      const blob = new Blob([JSON.stringify(bundle, null, 2)], {
-        type: 'application/json;charset=utf-8',
+    try {
+      const bundle = await this.engine.buildAccountExportBundle(this.profile);
+      if (this.exportFailed) {
+        this.updateState({ syncError: null });
+        await this.refreshCounts();
+      }
+      return bundle;
+    } catch (err) {
+      this.updateState({
+        syncError: humanizeCloudError(err).message,
+        overallSyncStatus: this.state.conflicts.length > 0 ? 'conflict' : 'error',
       });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      const dateStr = new Date().toISOString().slice(0, 10);
-      a.download = `commander-builder-backup-${dateStr}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
+      this.exportFailed = true;
+      throw err;
     }
-    return bundle;
   };
 
   signOutWithCleanup = async (clearLocalCloudCopies: boolean): Promise<void> => {

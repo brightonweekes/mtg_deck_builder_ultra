@@ -707,18 +707,29 @@ export function App() {
   }, [friends]);
 
   const handleExportAccountData = useCallback(async () => {
-    const bundle = await cloudSync.exportAllData();
-    const blob = new Blob([JSON.stringify(bundle, null, 2)], {
-      type: 'application/json;charset=utf-8',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const handleSlug = cloudAuth.profile?.handle || 'commander-vault';
-    a.download = `mtg-ultra-backup-${handleSlug}-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    setCloudNotice({ message: 'Downloaded cloud & local JSON backup.' });
+    let url: string | null = null;
+    try {
+      const bundle = await cloudSync.exportAllData();
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], {
+        type: 'application/json;charset=utf-8',
+      });
+      url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const handleSlug = cloudAuth.profile?.handle || 'commander-vault';
+      a.download = `mtg-ultra-backup-${handleSlug}-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      setCloudNotice({ message: 'Downloaded cloud & local JSON backup.' });
+    } catch (err) {
+      setCloudNotice({
+        message: humanizeCloudError(err).message,
+        isError: true,
+      });
+    } finally {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    }
   }, [cloudAuth.profile?.handle, cloudSync]);
 
   const handleSignOutAccount = useCallback(

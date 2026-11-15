@@ -284,6 +284,8 @@ describe('App Cloud Sync Integration', () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     for (const controller of controllers.splice(0)) {
       controller.dispose();
     }
@@ -753,12 +755,21 @@ describe('App Cloud Sync Integration', () => {
     // Add an unsynced local-only deck before sign-out
     await db.decks.put(localOnlyDeck);
 
+    const createElementSpy = vi.fn(() => ({ click: vi.fn() }));
+    const createObjectUrlSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock-url');
+    vi.stubGlobal('document', { createElement: createElementSpy });
+
     const bundle = await controller.exportAllData();
     expect(bundle.decks.map((d) => d.id).sort()).toEqual([
       'alice-cloud-deck',
       'bob-cached-deck',
       'local-guest-deck',
     ]);
+    expect(createElementSpy).not.toHaveBeenCalled();
+    expect(createObjectUrlSpy).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+    createObjectUrlSpy.mockRestore();
 
     await controller.signOutWithCleanup(true);
     expect(signOutHookCalled).toBe(1);
@@ -770,5 +781,34 @@ describe('App Cloud Sync Integration', () => {
 
     const remaining = await listSavedDeckRecords(db);
     expect(remaining.map((d) => d.id).sort()).toEqual(['bob-cached-deck', 'local-guest-deck']);
+  });
+
+  it('surfaces humanized export errors via syncError on exportAllData failure and clears on retry', async () => {
+    const db = createTestDb('export-error');
+    const provider = new InMemoryCloudProvider();
+    const controller = new CloudSyncController({
+      provider,
+      db,
+      resolveCardsByIds: async () => ({}),
+      windowTarget: null,
+      documentTarget: null,
+    });
+    controllers.push(controller);
+    controller.setAuthContext(VERIFIED_USER, ALICE_PROFILE);
+    await controller.syncNow();
+
+    const buildSpy = vi
+      .spyOn(controller.engine, 'buildAccountExportBundle')
+      .mockRejectedValueOnce(new Error('IndexedDB export failure'));
+
+    await expect(controller.exportAllData()).rejects.toThrow('IndexedDB export failure');
+    expect(controller.getSnapshot().syncError).toBe('IndexedDB export failure');
+    expect(controller.getSnapshot().overallSyncStatus).toBe('error');
+
+    buildSpy.mockRestore();
+    const recoveredBundle = await controller.exportAllData();
+    expect(recoveredBundle.schemaVersion).toBe(1);
+    expect(controller.getSnapshot().syncError).toBeNull();
+    expect(controller.getSnapshot().overallSyncStatus).toBe('synced');
   });
 });
