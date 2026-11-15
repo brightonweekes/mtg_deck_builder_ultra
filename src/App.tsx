@@ -1,26 +1,59 @@
 import { AlertTriangle, CheckCircle2, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { humanizeCloudError, parseCloudUrlIntents } from './cloud/validation.js';
+import { AccountModal } from './components/AccountModal.js';
 import { ActiveFilterBar } from './components/ActiveFilterBar.js';
+import { AuthModal } from './components/AuthModal.js';
 import { CardDetailModal } from './components/CardDetailModal.js';
 import { CardGrid } from './components/CardGrid.js';
 import { DeckManagerModal, type DeckManagerTab } from './components/DeckManagerModal.js';
 import { DeckWorkspace } from './components/DeckWorkspace.js';
 import { FilterSidebar } from './components/FilterSidebar.js';
+import { FriendsModal } from './components/FriendsModal.js';
 import { HeaderBar } from './components/HeaderBar.js';
 import { QuickDeckDrawer } from './components/QuickDeckDrawer.js';
+import { SharedDeckBanner } from './components/SharedDeckBanner.js';
+import { SyncConflictModal } from './components/SyncConflictModal.js';
 import { generateDeckId } from './db/deckDb.js';
 import { computeDeckAnalytics } from './deck/deckAnalytics.js';
 import { decodeDeckFromUrlParam } from './deck/urlCodec.js';
 import { useCardSearch } from './hooks/useCardSearch.js';
-import { useDeckDraft } from './hooks/useDeckDraft.js';
+import { useCloudAuth } from './hooks/useCloudAuth.js';
+import {
+  hydrateCloudDeckToClonedDraft,
+  useCloudSync,
+} from './hooks/useCloudSync.js';
+import { useDeckDraft, type DeckActionNotice } from './hooks/useDeckDraft.js';
+import { useFriends } from './hooks/useFriends.js';
 import {
   buildCommanderSynergyQuery,
   getChooseCommanderFilter,
   getCompatiblePartnerFilter,
 } from './search/commanderRules.js';
 import type { CompactCard, FunctionalRole, ManaColor } from './types/card.js';
+import type { CloudDeckRecord } from './types/cloud.js';
 import type { DeckCardEntry, DeckDraft, ViewMode, WorkspaceTab } from './types/deck.js';
 import type { ScoredCardMatch } from './types/search.js';
+
+function stripUrlQueryParams(...keys: string[]): void {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  let changed = false;
+  for (const key of keys) {
+    if (url.searchParams.has(key)) {
+      url.searchParams.delete(key);
+      changed = true;
+    }
+  }
+  if (changed) {
+    const search = url.searchParams.toString();
+    window.history.replaceState(
+      null,
+      '',
+      `${url.pathname}${search ? `?${search}` : ''}${url.hash}`,
+    );
+  }
+}
 
 export function App() {
   const {
@@ -34,6 +67,14 @@ export function App() {
     forceResync,
     resolveCards,
   } = useCardSearch();
+
+  const cloudAuth = useCloudAuth();
+  const friends = useFriends(cloudAuth.user, cloudAuth.profile);
+
+  const scheduleCloudPushRef = useRef<() => void>(() => {});
+  const handleDeckMutated = useCallback(() => {
+    scheduleCloudPushRef.current();
+  }, []);
 
   const {
     deck,
@@ -59,6 +100,8 @@ export function App() {
     autoFillBasicLands,
     moveIllegalCardsToSideboard,
     renameDeck,
+    setDeckDescription,
+    setDeckVisibility,
     clearDeck,
     getCardQuantity,
     isCommander,
@@ -67,7 +110,40 @@ export function App() {
     duplicateCurrentDeck,
     deleteSavedDeck,
     loadDeckDraft,
-  } = useDeckDraft();
+    refreshSavedDecks,
+    reloadActiveDeckFromDb,
+  } = useDeckDraft({ onDeckMutated: handleDeckMutated });
+
+  const refreshSavedDecksRef = useRef(refreshSavedDecks);
+  refreshSavedDecksRef.current = refreshSavedDecks;
+  const reloadActiveDeckRef = useRef(reloadActiveDeckFromDb);
+  reloadActiveDeckRef.current = reloadActiveDeckFromDb;
+  const lockIdentityRef = useRef(deck.lockSearchToCommanderIdentity);
+  lockIdentityRef.current = deck.lockSearchToCommanderIdentity;
+
+  const cloudSync = useCloudSync({
+    user: cloudAuth.user,
+    profile: cloudAuth.profile,
+    resolveCards,
+    savedDecks,
+    onSignOut: cloudAuth.signOut,
+    onExternalDecksUpdated: async (meta) => {
+      await refreshSavedDecksRef.current();
+      const nextIdentity = await reloadActiveDeckRef.current((ids) =>
+        resolveCards({ ids }).then((res) => res.byId),
+      );
+      if (nextIdentity === null || meta.reason === 'push') return;
+
+      if (meta.clearedCloudCopies) {
+        updateFilter({
+          colorIdentity: nextIdentity.length > 0 ? nextIdentity : null,
+        });
+      } else if (lockIdentityRef.current && nextIdentity.length > 0) {
+        updateFilter({ colorIdentity: nextIdentity });
+      }
+    },
+  });
+  scheduleCloudPushRef.current = cloudSync.scheduleCloudPush;
 
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('search');
   const [viewMode, setViewMode] = useState<ViewMode>('standard');
@@ -76,7 +152,23 @@ export function App() {
   const [deckManagerTab, setDeckManagerTab] = useState<DeckManagerTab | null>(null);
   const [inspectedMatch, setInspectedMatch] = useState<ScoredCardMatch | null>(null);
 
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const [friendsModalOpen, setFriendsModalOpen] = useState(false);
+  const [pendingFriendHandle, setPendingFriendHandle] = useState<string | null>(null);
+
+  const [sharedDeck, setSharedDeck] = useState<CloudDeckRecord | null>(null);
+  const [sharedDeckCommanders, setSharedDeckCommanders] = useState<CompactCard[]>([]);
+  const [sharedDeckLoading, setSharedDeckLoading] = useState(false);
+  const [sharedDeckError, setSharedDeckError] = useState<string | null>(null);
+
+  const [commanderNamesById, setCommanderNamesById] = useState<Record<string, string>>({});
+  const [cloudNotice, setCloudNotice] = useState<DeckActionNotice | null>(null);
+
   const handledShareUrlRef = useRef(false);
+  const handledCloudUrlRef = useRef(false);
+  const promptedAuthForFriendRef = useRef(false);
+  const openedFriendsForPendingRef = useRef(false);
 
   const analytics = useMemo(() => computeDeckAnalytics(deck), [deck]);
 
@@ -88,6 +180,65 @@ export function App() {
     // Intentional mount-only hydration sync
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const dismissSharedDeckBanner = useCallback(() => {
+    setSharedDeck(null);
+    setSharedDeckCommanders([]);
+    setSharedDeckLoading(false);
+    setSharedDeckError(null);
+  }, []);
+
+  const openSharedDeckById = useCallback(
+    async (deckId: string) => {
+      setSharedDeck(null);
+      setSharedDeckCommanders([]);
+      setSharedDeckError(null);
+      setSharedDeckLoading(true);
+      try {
+        const fetched = await friends.loadSharedDeck(deckId);
+        if (!fetched) {
+          setSharedDeckError(
+            cloudAuth.isConfigured
+              ? 'This shared deck could not be found, or its owner has made it private.'
+              : 'Cloud sharing is not configured in this build.',
+          );
+          return;
+        }
+        setSharedDeck(fetched);
+      } catch (err) {
+        setSharedDeckError(humanizeCloudError(err).message);
+      } finally {
+        setSharedDeckLoading(false);
+      }
+    },
+    [cloudAuth.isConfigured, friends],
+  );
+
+  const cloneCloudDeckRecord = useCallback(
+    async (sourceDeck: CloudDeckRecord) => {
+      try {
+        const cloned = await hydrateCloudDeckToClonedDraft(sourceDeck, resolveCards);
+        const nextIdentity = loadDeckDraft(
+          cloned,
+          `Cloned "${cloned.name}" into your Studio.`,
+        );
+        updateFilter({
+          colorIdentity:
+            cloned.commanders.length > 0 && cloned.lockSearchToCommanderIdentity
+              ? nextIdentity
+              : null,
+        });
+        setActiveTab('deck');
+        dismissSharedDeckBanner();
+      } catch (err) {
+        setCloudNotice({
+          message: humanizeCloudError(err).message,
+          isError: true,
+        });
+      }
+    },
+    [dismissSharedDeckBanner, loadDeckDraft, resolveCards, updateFilter],
+  );
 
   // Hydrate `?d=...` shared deck URL once the Web Worker catalog is ready
   useEffect(() => {
@@ -138,6 +289,9 @@ export function App() {
         mainboard,
         sideboard,
         lockSearchToCommanderIdentity: true,
+        visibility: 'private',
+        revision: 0,
+        syncStatus: 'local',
         createdAt: now,
         updatedAt: now,
       };
@@ -150,9 +304,121 @@ export function App() {
         colorIdentity: commanders.length > 0 ? nextIdentity : null,
       });
       setActiveTab('deck');
-      window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash}`);
+      stripUrlQueryParams('d');
     })();
   }, [syncStatus.stage, resolveCards, loadDeckDraft, updateFilter]);
+
+  // Parse cloud query intents (`?deck=<id>` and `?addFriend=<handle>`) cleanly on mount
+  useEffect(() => {
+    if (handledCloudUrlRef.current || typeof window === 'undefined') return;
+    handledCloudUrlRef.current = true;
+
+    const { sharedDeckId, addFriendHandle } = parseCloudUrlIntents(window.location.search);
+    if (sharedDeckId) {
+      stripUrlQueryParams('deck');
+      void openSharedDeckById(sharedDeckId);
+    }
+    if (addFriendHandle) {
+      stripUrlQueryParams('addFriend');
+      setPendingFriendHandle(addFriendHandle);
+    }
+  }, [openSharedDeckById]);
+
+  // Guide `?addFriend=<handle>` through Auth (if needed) into FriendsModal prefilled
+  useEffect(() => {
+    if (!pendingFriendHandle || cloudAuth.authLoading) return;
+
+    if (!cloudAuth.user || !cloudAuth.user.emailVerified) {
+      if (!promptedAuthForFriendRef.current) {
+        promptedAuthForFriendRef.current = true;
+        cloudAuth.clearError();
+        setAuthModalOpen(true);
+      }
+      return;
+    }
+
+    if (cloudAuth.profile && !openedFriendsForPendingRef.current) {
+      openedFriendsForPendingRef.current = true;
+      setAuthModalOpen(false);
+      friends.clearError();
+      setFriendsModalOpen(true);
+    }
+  }, [
+    cloudAuth,
+    friends,
+    pendingFriendHandle,
+  ]);
+
+  // Auto-close AuthModal once signed in and email-verified (when not redirected above)
+  useEffect(() => {
+    if (authModalOpen && cloudAuth.user?.emailVerified && !pendingFriendHandle) {
+      setAuthModalOpen(false);
+    }
+  }, [authModalOpen, cloudAuth.user?.emailVerified, pendingFriendHandle]);
+
+  // Resolve commander cards for SharedDeckBanner preview once catalog is ready
+  useEffect(() => {
+    if (!sharedDeck || syncStatus.stage !== 'ready') return;
+    if (sharedDeck.commanderOracleIds.length === 0) {
+      setSharedDeckCommanders([]);
+      return;
+    }
+
+    let cancelled = false;
+    void resolveCards({ ids: sharedDeck.commanderOracleIds })
+      .then(({ byId }) => {
+        if (cancelled) return;
+        const resolvedCmds: CompactCard[] = [];
+        for (const oid of sharedDeck.commanderOracleIds) {
+          const card = byId[oid];
+          if (card) resolvedCmds.push(card);
+        }
+        setSharedDeckCommanders(resolvedCmds);
+      })
+      .catch(() => {
+        if (!cancelled) setSharedDeckCommanders([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sharedDeck, syncStatus.stage, resolveCards]);
+
+  // Resolve friend deck commander names for FriendsModal summaries
+  const friendCommanderIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const deckList of Object.values(friends.friendDecksByUid)) {
+      for (const summary of deckList) {
+        for (const cid of summary.commanderOracleIds) {
+          if (cid) ids.add(cid);
+        }
+      }
+    }
+    return Array.from(ids);
+  }, [friends.friendDecksByUid]);
+
+  useEffect(() => {
+    if (syncStatus.stage !== 'ready' || friendCommanderIds.length === 0) return;
+
+    let cancelled = false;
+    void resolveCards({ ids: friendCommanderIds })
+      .then(({ byId }) => {
+        if (cancelled) return;
+        const nextMap: Record<string, string> = {};
+        for (const id of friendCommanderIds) {
+          const card = byId[id];
+          if (card) nextMap[id] = card.name;
+        }
+        setCommanderNamesById(nextMap);
+      })
+      .catch(() => {
+        // Non-fatal preview enrichment failure
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [friendCommanderIds, syncStatus.stage, resolveCards]);
 
   // Auto-dismiss toast notifications
   useEffect(() => {
@@ -160,6 +426,12 @@ export function App() {
     const timer = window.setTimeout(() => clearNotice(), 3400);
     return () => window.clearTimeout(timer);
   }, [lastNotice, clearNotice]);
+
+  useEffect(() => {
+    if (!cloudNotice) return;
+    const timer = window.setTimeout(() => setCloudNotice(null), 3800);
+    return () => window.clearTimeout(timer);
+  }, [cloudNotice]);
 
   const syncFilterIdentity = useCallback(
     (nextIdentity: ManaColor[] | null, hasCommanders: boolean) => {
@@ -414,6 +686,91 @@ export function App() {
     [loadDeckDraft, updateFilter],
   );
 
+  const handleOpenCloudAuthOrAccount = useCallback(() => {
+    if (!cloudAuth.user || !cloudAuth.user.emailVerified) {
+      cloudAuth.clearError();
+      setAuthModalOpen(true);
+      return;
+    }
+    if (cloudSync.conflicts.length > 0) {
+      cloudSync.openConflictModal();
+      return;
+    }
+    cloudAuth.clearError();
+    cloudSync.clearSyncError();
+    setAccountModalOpen(true);
+  }, [cloudAuth, cloudSync]);
+
+  const handleOpenFriendsModal = useCallback(() => {
+    friends.clearError();
+    setFriendsModalOpen(true);
+  }, [friends]);
+
+  const handleExportAccountData = useCallback(async () => {
+    const bundle = await cloudSync.exportAllData();
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], {
+      type: 'application/json;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const handleSlug = cloudAuth.profile?.handle || 'commander-vault';
+    a.download = `mtg-ultra-backup-${handleSlug}-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setCloudNotice({ message: 'Downloaded cloud & local JSON backup.' });
+  }, [cloudAuth.profile?.handle, cloudSync]);
+
+  const handleSignOutAccount = useCallback(
+    async (clearLocalCloudCopies: boolean) => {
+      await cloudSync.signOutWithCleanup(clearLocalCloudCopies);
+      setAccountModalOpen(false);
+      setCloudNotice({
+        message: clearLocalCloudCopies
+          ? 'Signed out and cleared cloud decks from this device.'
+          : 'Signed out. Local copies remain available offline.',
+      });
+    },
+    [cloudSync],
+  );
+
+  const handleDeleteAccount = useCallback(
+    async (reauthPassword?: string) => {
+      const uid = cloudAuth.user?.uid;
+      await cloudAuth.deleteAccount(reauthPassword);
+      if (uid) {
+        await cloudSync.cleanupAfterAccountDeletion(uid);
+      }
+      setAccountModalOpen(false);
+      setCloudNotice({ message: 'Deleted cloud account and cleared cloud sync data.' });
+    },
+    [cloudAuth, cloudSync],
+  );
+
+  const handleCloneFriendDeckById = useCallback(
+    async (deckId: string) => {
+      try {
+        const fetched = await friends.loadSharedDeck(deckId);
+        if (!fetched) {
+          setCloudNotice({
+            message: 'Shared deck could not be loaded.',
+            isError: true,
+          });
+          return;
+        }
+        setFriendsModalOpen(false);
+        await cloneCloudDeckRecord(fetched);
+      } catch (err) {
+        setCloudNotice({
+          message: humanizeCloudError(err).message,
+          isError: true,
+        });
+      }
+    },
+    [cloneCloudDeckRecord, friends],
+  );
+
+  const activeNotice = cloudNotice ?? lastNotice;
   const isReady = syncStatus.stage === 'ready';
 
   return (
@@ -427,9 +784,17 @@ export function App() {
         totalDeckCards={totalCardCount}
         syncStatus={syncStatus}
         searchResult={searchResult}
+        cloudUser={cloudAuth.user}
+        cloudProfile={cloudAuth.profile}
+        cloudSyncStatus={cloudSync.overallSyncStatus}
+        isCloudSyncing={cloudSync.isSyncing}
+        conflictCount={cloudSync.conflicts.length}
+        incomingFriendRequestsCount={friends.incomingRequests.length}
         onOpenMobileFilters={() => setMobileFiltersOpen(true)}
         onOpenDeckDrawer={() => setDeckDrawerOpen(true)}
         onOpenDeckManager={() => setDeckManagerTab('decks')}
+        onOpenFriends={handleOpenFriendsModal}
+        onOpenCloudAuthOrAccount={handleOpenCloudAuthOrAccount}
         onMatchCommanderSynergy={handleMatchCommanderSynergy}
         onFindPartner={handleFindPartner}
         onClearCommanders={handleClearCommanders}
@@ -519,6 +884,8 @@ export function App() {
           combinedColorIdentity={combinedColorIdentity}
           basicLands={basicLands}
           onRenameDeck={renameDeck}
+          onChangeVisibility={setDeckVisibility}
+          onChangeDescription={setDeckDescription}
           onRemoveCommander={handleRemoveCommander}
           onToggleIdentityLock={handleToggleIdentityLock}
           onMatchSynergy={handleMatchCommanderSynergy}
@@ -574,6 +941,9 @@ export function App() {
         initialTab={deckManagerTab ?? 'decks'}
         activeDeck={deck}
         savedDecks={savedDecks}
+        cloudUser={cloudAuth.user}
+        isCloudConfigured={cloudAuth.isConfigured}
+        isCloudSyncing={cloudSync.isSyncing}
         resolveCards={resolveCards}
         onClose={() => setDeckManagerTab(null)}
         onCreateNewDeck={handleCreateNewDeck}
@@ -581,6 +951,125 @@ export function App() {
         onDuplicateCurrentDeck={duplicateCurrentDeck}
         onDeleteDeck={deleteSavedDeck}
         onImportDeckDraft={handleImportDeckDraft}
+        onChangeVisibility={setDeckVisibility}
+        onSyncNow={async () => {
+          await cloudSync.syncNow();
+        }}
+        onOpenAuth={() => {
+          cloudAuth.clearError();
+          setAuthModalOpen(true);
+        }}
+      />
+
+      {/* Cloud Auth Modal */}
+      <AuthModal
+        open={authModalOpen}
+        isConfigured={cloudAuth.isConfigured}
+        currentUser={cloudAuth.user}
+        loading={cloudAuth.authLoading || cloudAuth.profileLoading}
+        error={cloudAuth.error}
+        onClose={() => {
+          setAuthModalOpen(false);
+          cloudAuth.clearError();
+        }}
+        onClearError={cloudAuth.clearError}
+        onSignInWithEmail={cloudAuth.signInWithEmail}
+        onSignUpWithEmail={cloudAuth.signUpWithEmail}
+        onSignInWithGoogle={cloudAuth.signInWithGoogle}
+        onSendPasswordReset={cloudAuth.sendPasswordReset}
+        onResendVerification={cloudAuth.resendVerificationEmail}
+        onRefreshVerification={cloudAuth.refreshVerificationStatus}
+        onSignOut={async () => {
+          await cloudSync.signOutWithCleanup(false);
+          setAuthModalOpen(false);
+        }}
+      />
+
+      {/* Cloud Account & Backup Modal */}
+      {cloudAuth.user && (
+        <AccountModal
+          open={accountModalOpen}
+          user={cloudAuth.user}
+          profile={cloudAuth.profile}
+          syncStatus={cloudSync.overallSyncStatus}
+          pendingCount={cloudSync.pendingCount}
+          syncedDeckCount={cloudSync.syncedDeckCount}
+          cardListCount={cloudSync.cardListCount}
+          lastSyncedAt={cloudSync.lastSyncedAt}
+          isSyncing={cloudSync.isSyncing}
+          error={cloudSync.syncError ?? cloudAuth.error}
+          onClose={() => {
+            setAccountModalOpen(false);
+            cloudAuth.clearError();
+            cloudSync.clearSyncError();
+          }}
+          onSyncNow={async () => {
+            await cloudSync.syncNow();
+          }}
+          onUpdateHandle={(newHandle, displayName) =>
+            cloudAuth.updateHandle(newHandle, displayName)
+          }
+          onExportData={handleExportAccountData}
+          onSignOut={handleSignOutAccount}
+          onDeleteAccount={handleDeleteAccount}
+        />
+      )}
+
+      {/* Friends & Shared Decks Modal */}
+      <FriendsModal
+        open={friendsModalOpen}
+        currentUser={cloudAuth.user}
+        currentProfile={cloudAuth.profile}
+        friendships={friends.friendships}
+        friendDecksByUid={friends.friendDecksByUid}
+        loading={friends.loading}
+        busyId={friends.busyPairId}
+        error={friends.error}
+        prefillFriendHandle={pendingFriendHandle}
+        commanderNamesById={commanderNamesById}
+        onClose={() => {
+          setFriendsModalOpen(false);
+          setPendingFriendHandle(null);
+          friends.clearError();
+        }}
+        onOpenAuth={() => {
+          setFriendsModalOpen(false);
+          cloudAuth.clearError();
+          setAuthModalOpen(true);
+        }}
+        onSendFriendRequest={friends.sendFriendRequest}
+        onAcceptFriendRequest={friends.acceptFriendRequest}
+        onRemoveFriendship={friends.removeFriendship}
+        onLoadFriendDecks={friends.loadFriendDecks}
+        onOpenSharedDeck={async (deckId) => {
+          setFriendsModalOpen(false);
+          await openSharedDeckById(deckId);
+        }}
+        onCloneSharedDeck={handleCloneFriendDeckById}
+      />
+
+      {/* Cloud Sync Conflict Resolution Modal */}
+      <SyncConflictModal
+        conflict={cloudSync.activeConflict}
+        resolving={cloudSync.resolvingConflict}
+        onResolve={async (resolution) => {
+          await cloudSync.resolveActiveConflict(resolution);
+        }}
+        onClose={cloudSync.dismissActiveConflict}
+      />
+
+      {/* Shared Cloud Deck Preview & Clone Banner */}
+      <SharedDeckBanner
+        sharedDeck={sharedDeck}
+        commanders={sharedDeckCommanders}
+        loading={sharedDeckLoading}
+        error={sharedDeckError}
+        onCloneIntoStudio={() => {
+          if (sharedDeck) {
+            void cloneCloudDeckRecord(sharedDeck);
+          }
+        }}
+        onDismiss={dismissSharedDeckBanner}
       />
 
       {/* Detailed Card Inspection Modal */}
@@ -601,24 +1090,27 @@ export function App() {
       />
 
       {/* Action Feedback Toast */}
-      {lastNotice && (
+      {activeNotice && (
         <div
           role="status"
           className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-xs font-medium shadow-xl backdrop-blur ${
-            lastNotice.isError
+            activeNotice.isError
               ? 'border-rose-500/40 bg-rose-950/95 text-rose-100'
               : 'border-emerald-500/40 bg-slate-900/95 text-emerald-100'
           }`}
         >
-          {lastNotice.isError ? (
+          {activeNotice.isError ? (
             <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
           ) : (
             <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
           )}
-          <span>{lastNotice.message}</span>
+          <span>{activeNotice.message}</span>
           <button
             type="button"
-            onClick={clearNotice}
+            onClick={() => {
+              setCloudNotice(null);
+              clearNotice();
+            }}
             aria-label="Dismiss notification"
             className="ml-1 rounded p-0.5 text-slate-400 hover:bg-slate-800 hover:text-slate-100"
           >

@@ -1,29 +1,78 @@
 import {
   Check,
+  Cloud,
   Copy,
   Download,
   FolderOpen,
   Link2,
   Plus,
+  RefreshCw,
   Trash2,
   Upload,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { buildSharedDeckUrl } from '../cloud/validation.js';
 import type { SavedDeckRecord } from '../db/cardDb.js';
 import { generateDeckId } from '../db/deckDb.js';
 import { exportDeckToText, parseDeckListText } from '../deck/deckSerializer.js';
 import { encodeDeckToUrlParam } from '../deck/urlCodec.js';
 import type { CompactCard } from '../types/card.js';
+import type { CloudUser, DeckVisibility, SyncStatus } from '../types/cloud.js';
 import type { DeckCardEntry, DeckDraft } from '../types/deck.js';
 
 export type DeckManagerTab = 'decks' | 'import-export' | 'share';
+
+const VISIBILITY_BADGE_MAP: Record<DeckVisibility, { label: string; className: string }> = {
+  private: {
+    label: 'Private',
+    className: 'border-slate-700 bg-slate-900 text-slate-300',
+  },
+  friends: {
+    label: 'Friends',
+    className: 'border-indigo-500/40 bg-indigo-500/15 text-indigo-200',
+  },
+  link: {
+    label: 'Link',
+    className: 'border-sky-500/40 bg-sky-500/15 text-sky-200',
+  },
+  public: {
+    label: 'Public',
+    className: 'border-emerald-500/40 bg-emerald-500/15 text-emerald-200',
+  },
+};
+
+const SYNC_BADGE_MAP: Record<SyncStatus, { label: string; className: string }> = {
+  synced: {
+    label: 'Synced',
+    className: 'bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/35',
+  },
+  pending: {
+    label: 'Pending',
+    className: 'bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/35',
+  },
+  local: {
+    label: 'Local',
+    className: 'bg-slate-800 text-slate-300 ring-1 ring-slate-700',
+  },
+  conflict: {
+    label: 'Conflict',
+    className: 'bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/50',
+  },
+  error: {
+    label: 'Error',
+    className: 'bg-rose-500/20 text-rose-200 ring-1 ring-rose-500/40',
+  },
+};
 
 interface DeckManagerModalProps {
   open: boolean;
   initialTab: DeckManagerTab;
   activeDeck: DeckDraft;
   savedDecks: SavedDeckRecord[];
+  cloudUser?: CloudUser | null;
+  isCloudConfigured?: boolean;
+  isCloudSyncing?: boolean;
   resolveCards: (req: {
     ids?: string[];
     names?: string[];
@@ -34,6 +83,9 @@ interface DeckManagerModalProps {
   onDuplicateCurrentDeck: () => Promise<void>;
   onDeleteDeck: (deckId: string) => Promise<void>;
   onImportDeckDraft: (draft: DeckDraft, noticeMessage?: string) => void;
+  onChangeVisibility?: (visibility: DeckVisibility) => void;
+  onSyncNow?: () => Promise<void>;
+  onOpenAuth?: () => void;
 }
 
 function countRecordCards(record: SavedDeckRecord): number {
@@ -47,6 +99,9 @@ export function DeckManagerModal({
   initialTab,
   activeDeck,
   savedDecks,
+  cloudUser = null,
+  isCloudConfigured = true,
+  isCloudSyncing = false,
   resolveCards,
   onClose,
   onCreateNewDeck,
@@ -54,6 +109,9 @@ export function DeckManagerModal({
   onDuplicateCurrentDeck,
   onDeleteDeck,
   onImportDeckDraft,
+  onChangeVisibility,
+  onSyncNow,
+  onOpenAuth,
 }: DeckManagerModalProps) {
   const [tab, setTab] = useState<DeckManagerTab>(initialTab);
   const [newDeckName, setNewDeckName] = useState('');
@@ -63,7 +121,7 @@ export function DeckManagerModal({
     missingNames: string[];
   } | null>(null);
   const [isImporting, setIsImporting] = useState(false);
-  const [copiedKey, setCopiedKey] = useState<'export' | 'share' | null>(null);
+  const [copiedKey, setCopiedKey] = useState<'export' | 'share' | 'cloud-share' | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -91,10 +149,14 @@ export function DeckManagerModal({
     const encoded = encodeDeckToUrlParam(activeDeck);
     return `${window.location.origin}${window.location.pathname}?d=${encoded}`;
   }, [open, activeDeck]);
+  const cloudShareUrl = useMemo(() => {
+    if (!open || typeof window === 'undefined') return '';
+    return buildSharedDeckUrl(window.location.origin, window.location.pathname, activeDeck.id);
+  }, [open, activeDeck.id]);
 
   if (!open) return null;
 
-  const copyToClipboard = async (value: string, key: 'export' | 'share') => {
+  const copyToClipboard = async (value: string, key: 'export' | 'share' | 'cloud-share') => {
     try {
       await navigator.clipboard.writeText(value);
       setCopiedKey(key);
@@ -278,6 +340,14 @@ export function DeckManagerModal({
                   savedDecks.map((item) => {
                     const isActive = item.id === activeDeck.id;
                     const count = countRecordCards(item);
+                    const visibility: DeckVisibility = isActive
+                      ? (activeDeck.visibility ?? item.visibility ?? 'private')
+                      : (item.visibility ?? 'private');
+                    const syncStatus: SyncStatus = isActive
+                      ? (activeDeck.syncStatus ?? item.syncStatus ?? 'local')
+                      : (item.syncStatus ?? 'local');
+                    const visBadge = VISIBILITY_BADGE_MAP[visibility];
+                    const syncBadge = SYNC_BADGE_MAP[syncStatus];
                     return (
                       <div
                         key={item.id}
@@ -288,7 +358,7 @@ export function DeckManagerModal({
                         }`}
                       >
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
                             <span className="truncate text-sm font-bold text-slate-100">
                               {item.name}
                             </span>
@@ -297,6 +367,16 @@ export function DeckManagerModal({
                                 Active
                               </span>
                             )}
+                            <span
+                              className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${visBadge.className}`}
+                            >
+                              {visBadge.label}
+                            </span>
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${syncBadge.className}`}
+                            >
+                              {syncBadge.label}
+                            </span>
                           </div>
                           <div className="mt-0.5 font-mono text-[11px] text-slate-400">
                             {count}/100 cards · Updated{' '}
@@ -415,50 +495,217 @@ export function DeckManagerModal({
             </div>
           )}
 
-          {tab === 'share' && (
-            <div className="space-y-4">
-              <div className="rounded-xl border border-violet-500/30 bg-violet-950/20 p-4">
-                <h3 className="font-bold text-violet-100">
-                  Zero-Server Shareable URL (?d=...)
-                </h3>
-                <p className="mt-1 text-slate-300">
-                  Your entire deck (Commanders, Mainboard, and Considering) is binary-packed
-                  directly into this URL so anyone can open and clone it with zero backend
-                  database.
-                </p>
-              </div>
+          {tab === 'share' && (() => {
+            const activeVis = activeDeck.visibility ?? 'private';
+            const activeSync = activeDeck.syncStatus ?? 'local';
+            const isVerified = Boolean(cloudUser?.emailVerified);
+            const isCloudShareable = activeVis === 'link' || activeVis === 'public';
 
-              <textarea
-                readOnly
-                rows={4}
-                value={shareUrl}
-                className="w-full break-all rounded-xl border border-slate-700 bg-slate-950 p-3 font-mono text-[11px] text-slate-300 outline-none"
-              />
+            return (
+              <div className="space-y-4">
+                <div className="space-y-3 rounded-xl border border-sky-500/35 bg-sky-950/20 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Cloud className="h-4 w-4 text-sky-400" />
+                      <h3 className="font-bold text-sky-100">
+                        Cloud Short Link (?deck=...)
+                      </h3>
+                    </div>
+                    <span
+                      className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${
+                        VISIBILITY_BADGE_MAP[activeVis].className
+                      }`}
+                    >
+                      {VISIBILITY_BADGE_MAP[activeVis].label}
+                    </span>
+                  </div>
 
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-mono text-[11px] text-slate-400">
-                  Link length: {shareUrl.length.toLocaleString()} characters
-                </span>
-                <button
-                  type="button"
-                  onClick={() => void copyToClipboard(shareUrl, 'share')}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-violet-500 px-4 py-2 font-semibold text-white hover:bg-violet-400"
-                >
-                  {copiedKey === 'share' ? (
-                    <>
-                      <Check className="h-3.5 w-3.5" />
-                      Copied Share Link
-                    </>
+                  {!cloudUser ? (
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+                      <p className="max-w-md text-xs text-slate-300">
+                        {isCloudConfigured
+                          ? 'Sign in to publish a short cloud share link (?deck=...) and keep visibility across devices.'
+                          : 'Cloud sync is not configured in this build. You can still share using the zero-server ?d= URL below.'}
+                      </p>
+                      {onOpenAuth && isCloudConfigured && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClose();
+                            onOpenAuth();
+                          }}
+                          className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-amber-400"
+                        >
+                          Sign In to Share
+                        </button>
+                      )}
+                    </div>
+                  ) : !isVerified ? (
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/35 bg-amber-500/10 p-3">
+                      <p className="text-xs text-amber-200">
+                        Verify your email address before sharing cloud short links.
+                      </p>
+                      {onOpenAuth && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClose();
+                            onOpenAuth();
+                          }}
+                          className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-amber-400"
+                        >
+                          Verify Account
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <>
-                      <Link2 className="h-3.5 w-3.5" />
-                      Copy Share Link
+                      <p className="text-xs text-slate-300">
+                        Publish <strong className="text-slate-100">{activeDeck.name}</strong> with
+                        Unlisted Link or Public visibility so anyone can inspect and clone it via a
+                        clean short link.
+                      </p>
+
+                      {onChangeVisibility && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => onChangeVisibility('link')}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                              activeVis === 'link'
+                                ? 'bg-sky-500 text-slate-950'
+                                : 'border border-slate-700 bg-slate-900 text-slate-200 hover:border-sky-400/60 hover:text-sky-200'
+                            }`}
+                          >
+                            {activeVis === 'link' ? 'Unlisted Link Active' : 'Set Unlisted Link'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onChangeVisibility('public')}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                              activeVis === 'public'
+                                ? 'bg-emerald-500 text-slate-950'
+                                : 'border border-slate-700 bg-slate-900 text-slate-200 hover:border-emerald-400/60 hover:text-emerald-200'
+                            }`}
+                          >
+                            {activeVis === 'public' ? 'Public Active' : 'Set Public'}
+                          </button>
+                          {isCloudShareable && (
+                            <button
+                              type="button"
+                              onClick={() => onChangeVisibility('private')}
+                              className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:border-rose-400/50 hover:text-rose-200"
+                            >
+                              Make Private
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {isCloudShareable ? (
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              type="text"
+                              readOnly
+                              value={cloudShareUrl}
+                              aria-label="Cloud short share URL"
+                              className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-[11px] text-slate-200 outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void copyToClipboard(cloudShareUrl, 'cloud-share')}
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-sky-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-sky-400"
+                            >
+                              {copiedKey === 'cloud-share' ? (
+                                <>
+                                  <Check className="h-3.5 w-3.5" />
+                                  Copied Link
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="h-3.5 w-3.5" />
+                                  Copy Cloud Link
+                                </>
+                              )}
+                            </button>
+                          </div>
+
+                          {activeSync !== 'synced' && (
+                            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
+                              <span>
+                                Deck has local changes waiting to push (auto-syncs after 4s idle).
+                              </span>
+                              {onSyncNow && (
+                                <button
+                                  type="button"
+                                  disabled={isCloudSyncing}
+                                  onClick={() => void onSyncNow()}
+                                  className="inline-flex items-center gap-1 rounded-md bg-amber-500 px-2.5 py-1 font-semibold text-slate-950 hover:bg-amber-400 disabled:opacity-50"
+                                >
+                                  <RefreshCw
+                                    className={`h-3 w-3 ${isCloudSyncing ? 'animate-spin' : ''}`}
+                                  />
+                                  {isCloudSyncing ? 'Syncing...' : 'Sync Now'}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-400">
+                          Choose <strong className="text-slate-200">Set Unlisted Link</strong> or{' '}
+                          <strong className="text-slate-200">Set Public</strong> above to activate{' '}
+                          <code className="font-mono text-sky-300">?deck={activeDeck.id}</code>.
+                        </p>
+                      )}
                     </>
                   )}
-                </button>
+                </div>
+
+                <div className="rounded-xl border border-violet-500/30 bg-violet-950/20 p-4">
+                  <h3 className="font-bold text-violet-100">
+                    Zero-Server Shareable URL (?d=...)
+                  </h3>
+                  <p className="mt-1 text-slate-300">
+                    Your entire deck (Commanders, Mainboard, and Considering) is binary-packed
+                    directly into this URL so anyone can open and clone it with zero backend
+                    database.
+                  </p>
+                </div>
+
+                <textarea
+                  readOnly
+                  rows={4}
+                  value={shareUrl}
+                  className="w-full break-all rounded-xl border border-slate-700 bg-slate-950 p-3 font-mono text-[11px] text-slate-300 outline-none"
+                />
+
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-[11px] text-slate-400">
+                    Link length: {shareUrl.length.toLocaleString()} characters
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void copyToClipboard(shareUrl, 'share')}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-violet-500 px-4 py-2 font-semibold text-white hover:bg-violet-400"
+                  >
+                    {copiedKey === 'share' ? (
+                      <>
+                        <Check className="h-3.5 w-3.5" />
+                        Copied Share Link
+                      </>
+                    ) : (
+                      <>
+                        <Link2 className="h-3.5 w-3.5" />
+                        Copy Share Link
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       </div>
     </div>
