@@ -38,11 +38,39 @@ service cloud.firestore {
     function isReservedHandle(handleLower) {
       return handleLower in [
         'admin',
+        'administrator',
         'system',
         'support',
         'moderator',
+        'mod',
         'wizards',
-        'official'
+        'wotc',
+        'official',
+        'staff',
+        'team',
+        'security',
+        'abuse',
+        'owner',
+        'root',
+        'help',
+        'bot',
+        'null',
+        'undefined',
+        'anonymous',
+        'guest',
+        'scryfall',
+        'firebase',
+        'noreply',
+        'no-reply',
+        'postmaster',
+        'webmaster',
+        'api',
+        'auth',
+        'account',
+        'profile',
+        'profiles',
+        'handle',
+        'handles'
       ];
     }
 
@@ -415,20 +443,21 @@ service cloud.firestore {
           || isTimestampString(request.resource.data.updatedAt)
         );
       allow update: if false;
-      allow delete: if isVerified() && resource.data.uid == request.auth.uid;
+      allow delete: if isVerified() && resource != null && resource.data.uid == request.auth.uid;
     }
 
     // Bidirectional friend requests and accepted friendships
     match /friendships/{pairDocId} {
-      allow get: if isVerified() && request.auth.uid in resource.data.users;
+      allow get: if isVerified() && resource != null && request.auth.uid in resource.data.users;
       allow list: if isVerified() && request.auth.uid in resource.data.users;
       allow create: if isVerified()
         && isValidFriendshipCreate(pairDocId, request.resource.data);
       allow update: if isVerified()
+        && resource != null
         && request.auth.uid in resource.data.users
         && request.auth.uid != resource.data.requestedBy
         && isValidFriendshipAccept(pairDocId, resource.data, request.resource.data);
-      allow delete: if isVerified() && request.auth.uid in resource.data.users;
+      allow delete: if isVerified() && resource != null && request.auth.uid in resource.data.users;
     }
 
     // Single summary document per user listing only friends/public deck metadata
@@ -446,7 +475,8 @@ service cloud.firestore {
 
     // Cloud-synced Commander decks
     match /decks/{deckId} {
-      allow get: if resource.data.visibility in ['public', 'link']
+      allow get: if resource == null
+        || resource.data.visibility in ['public', 'link']
         || (isVerified() && resource.data.ownerUid == request.auth.uid)
         || (
           isVerified()
@@ -462,23 +492,32 @@ service cloud.firestore {
 
       allow list: if (isVerified() && resource.data.ownerUid == request.auth.uid)
         || resource.data.visibility == 'public'
-        || (isVerified() && request.auth.uid in resource.data.sharedWithUids);
+        || (
+          isVerified()
+          && 'sharedWithUids' in resource.data
+          && resource.data.sharedWithUids is list
+          && request.auth.uid in resource.data.sharedWithUids
+        );
 
       allow create: if isVerified()
         && request.resource.data.ownerUid == request.auth.uid
         && isValidDeckDoc(deckId, request.resource.data);
 
       allow update: if isVerified()
+        && resource != null
         && resource.data.ownerUid == request.auth.uid
         && request.resource.data.ownerUid == request.auth.uid
         && isValidDeckDoc(deckId, request.resource.data);
 
-      allow delete: if isVerified() && resource.data.ownerUid == request.auth.uid;
+      allow delete: if isVerified()
+        && resource != null
+        && resource.data.ownerUid == request.auth.uid;
     }
 
     // Cloud-synced collections, wishlists, trade binders, and synergy packages
     match /cardlists/{listId} {
-      allow get: if resource.data.visibility in ['public', 'link']
+      allow get: if resource == null
+        || resource.data.visibility in ['public', 'link']
         || (isVerified() && resource.data.ownerUid == request.auth.uid)
         || (
           isVerified()
@@ -494,18 +533,26 @@ service cloud.firestore {
 
       allow list: if (isVerified() && resource.data.ownerUid == request.auth.uid)
         || resource.data.visibility == 'public'
-        || (isVerified() && request.auth.uid in resource.data.sharedWithUids);
+        || (
+          isVerified()
+          && 'sharedWithUids' in resource.data
+          && resource.data.sharedWithUids is list
+          && request.auth.uid in resource.data.sharedWithUids
+        );
 
       allow create: if isVerified()
         && request.resource.data.ownerUid == request.auth.uid
         && isValidCardListDoc(listId, request.resource.data);
 
       allow update: if isVerified()
+        && resource != null
         && resource.data.ownerUid == request.auth.uid
         && request.resource.data.ownerUid == request.auth.uid
         && isValidCardListDoc(listId, request.resource.data);
 
-      allow delete: if isVerified() && resource.data.ownerUid == request.auth.uid;
+      allow delete: if isVerified()
+        && resource != null
+        && resource.data.ownerUid == request.auth.uid;
     }
 
     // Catch-all deny rule
