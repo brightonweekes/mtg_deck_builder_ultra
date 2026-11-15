@@ -12,7 +12,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
-import { useEffect, useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import {
   validateEmail,
   validateHandle,
@@ -104,14 +104,40 @@ export function AuthModal({
   const [resendCooldown, setResendCooldown] = useState(0);
   const [verificationSentNotice, setVerificationSentNotice] = useState(false);
 
+  const onClearErrorRef = useRef(onClearError);
+  onClearErrorRef.current = onClearError;
+  const prevOpenRef = useRef(open);
+  const clearedForCloseRef = useRef(false);
+
+  const handleClose = () => {
+    clearedForCloseRef.current = true;
+    onClearErrorRef.current();
+    onClose();
+  };
+
   useEffect(() => {
     setPasswordInput('');
     setConfirmPasswordInput('');
     setShowPassword(false);
-    if (!open) return;
-    setLocalError(null);
-    setResetSentTo(null);
-    setVerificationSentNotice(false);
+    const wasOpen = prevOpenRef.current;
+    prevOpenRef.current = open;
+    if (open) {
+      clearedForCloseRef.current = false;
+      setLocalError(null);
+      setResetSentTo(null);
+      setVerificationSentNotice(false);
+      if (!wasOpen) {
+        onClearErrorRef.current();
+      }
+    } else if (wasOpen) {
+      setLocalError(null);
+      setResetSentTo(null);
+      setVerificationSentNotice(false);
+      if (!clearedForCloseRef.current) {
+        onClearErrorRef.current();
+      }
+      clearedForCloseRef.current = false;
+    }
   }, [open]);
 
   useEffect(() => {
@@ -119,6 +145,8 @@ export function AuthModal({
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
+        clearedForCloseRef.current = true;
+        onClearErrorRef.current();
         onClose();
       }
     };
@@ -265,7 +293,7 @@ export function AuthModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
-      onClick={onClose}
+      onClick={handleClose}
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
     >
       <div
@@ -293,7 +321,7 @@ export function AuthModal({
 
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             aria-label="Close authentication modal"
             className="rounded-lg border border-slate-700 bg-slate-950 p-1.5 text-slate-400 hover:text-white"
           >
@@ -337,7 +365,7 @@ export function AuthModal({
 
               <button
                 type="button"
-                onClick={onClose}
+                onClick={handleClose}
                 className="w-full rounded-xl bg-amber-500 px-4 py-2.5 font-semibold text-slate-950 transition hover:bg-amber-400"
               >
                 Continue Offline

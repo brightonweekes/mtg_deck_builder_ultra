@@ -149,6 +149,10 @@ const firebaseMocks = vi.hoisted(() => ({
     assertNoInjectedError('reauthenticateWithCredential');
     return { user: mockState.auth.currentUser };
   }),
+  reauthenticateWithPopup: vi.fn(async () => {
+    assertNoInjectedError('reauthenticateWithPopup');
+    return { user: mockState.auth.currentUser };
+  }),
   deleteUser: vi.fn(async () => {
     assertNoInjectedError('deleteUser');
     mockState.auth.currentUser = null;
@@ -180,6 +184,7 @@ vi.mock('firebase/auth', () => ({
   sendPasswordResetEmail: firebaseMocks.sendPasswordResetEmail,
   signOut: firebaseMocks.signOut,
   reauthenticateWithCredential: firebaseMocks.reauthenticateWithCredential,
+  reauthenticateWithPopup: firebaseMocks.reauthenticateWithPopup,
   deleteUser: firebaseMocks.deleteUser,
 }));
 
@@ -723,6 +728,54 @@ describe('firebaseConfig & FirebaseCloudProvider', () => {
       ).toBe(false);
       expect(mockState.docs.get('profiles/uid-alice')?.displayName).toBe('Alice Updated');
     });
+
+    it('claimHandle reads old handle before writes and skips tx.delete when old handle doc is missing or owned by another user', async () => {
+      // Case 1: Profile references an old handle whose /handles doc does not exist
+      mockState.docs.set('profiles/uid-alice', {
+        uid: 'uid-alice',
+        handle: 'ghost_handle',
+        handleLower: 'ghost_handle',
+        displayName: 'Alice',
+        createdAt: '2026-11-10T00:00:00.000Z',
+        updatedAt: '2026-11-10T00:00:00.000Z',
+      });
+
+      mockState.txLog = [];
+      const renamedMissing = await firebaseProvider.claimHandle('uid-alice', 'alice_fresh');
+      expect(renamedMissing.handleLower).toBe('alice_fresh');
+
+      expect(
+        mockState.txLog.some((e) => e.op === 'get' && e.path === 'handles/ghost_handle'),
+      ).toBe(true);
+      expect(
+        mockState.txLog.some((e) => e.op === 'delete' && e.path === 'handles/ghost_handle'),
+      ).toBe(false);
+      const firstWriteIdx = mockState.txLog.findIndex((e) => e.op !== 'get');
+      const lastReadIdx = mockState.txLog.map((e) => e.op).lastIndexOf('get');
+      expect(lastReadIdx).toBeLessThan(firstWriteIdx);
+
+      // Case 2: Profile references an old handle doc owned by someone else -> do NOT delete it
+      mockState.docs.set('handles/shared_by_bob', {
+        uid: 'uid-bob',
+        handle: 'shared_by_bob',
+        handleLower: 'shared_by_bob',
+      });
+      mockState.docs.set('profiles/uid-alice', {
+        uid: 'uid-alice',
+        handle: 'shared_by_bob',
+        handleLower: 'shared_by_bob',
+        displayName: 'Alice',
+        createdAt: '2026-11-10T00:00:00.000Z',
+        updatedAt: '2026-11-10T00:00:00.000Z',
+      });
+
+      mockState.txLog = [];
+      await firebaseProvider.claimHandle('uid-alice', 'alice_next');
+      expect(
+        mockState.txLog.some((e) => e.op === 'delete' && e.path === 'handles/shared_by_bob'),
+      ).toBe(false);
+      expect(mockState.docs.get('handles/shared_by_bob')?.uid).toBe('uid-bob');
+    });
   });
 
   describe('Deck & CardList Cloud Sync', () => {
@@ -847,7 +900,7 @@ describe('firebaseConfig & FirebaseCloudProvider', () => {
         '2026-11-11T00:00:00.000Z',
       );
       expect(deltaAlice.map((d) => d.id)).toEqual(['d2']);
-      expect(firestoreMocks.orderBy).toHaveBeenCalledWith('updatedAt', 'asc');
+      expect(firestoreMocks.orderBy).toHaveBeenCalledWith('updatedAt', 'desc');
     });
 
     it('pushCardList and pullCardListsSince handle revisions and delta queries cleanly', async () => {
@@ -863,6 +916,14 @@ describe('firebaseConfig & FirebaseCloudProvider', () => {
       const pulled = await firebaseProvider.pullCardListsSince('uid-alice', null);
       expect(pulled).toHaveLength(1);
       expect(pulled[0]?.id).toBe('list-1');
+
+      firestoreMocks.orderBy.mockClear();
+      const deltaPulled = await firebaseProvider.pullCardListsSince(
+        'uid-alice',
+        '2026-11-01T00:00:00.000Z',
+      );
+      expect(deltaPulled).toHaveLength(1);
+      expect(firestoreMocks.orderBy).toHaveBeenCalledWith('updatedAt', 'desc');
     });
 
     it('getSharedDeckById returns null when missing or deleted and throws humanized error on permission-denied', async () => {
@@ -1036,6 +1097,133 @@ describe('firebaseConfig & FirebaseCloudProvider', () => {
       expect(mockState.docs.has('cardlists/l-alice')).toBe(false);
       expect(mockState.docs.has('friendships/uid-alice_uid-bob')).toBe(false);
       expect(mockState.docs.has('profiles/uid-bob')).toBe(true);
+    });
+
+    it('deleteAccountAndData requires password reauth before touching Firestore for password accounts', async () => {
+      mockState.auth.currentUser = {
+        uid: 'uid-alice',
+        email: 'alice@example.com',
+        emailVerified: true,
+        displayName: 'alice_mtg',
+        providerData: [{ providerId: 'password' }],
+      };
+      mockState.docs.set('profiles/uid-alice', { uid: 'uid-alice', handleLower: 'alice_mtg' });
+      mockState.docs.set('handles/alice_mtg', { uid: 'uid-alice', handle: 'alice_mtg' });
+      mockState.docs.set(
+        'decks/d-alice',
+        makeSampleCloudDeck({ id: 'd-alice', ownerUid: 'uid-alice' }) as unknown as StoredDoc,
+      );
+
+      // Missing password throws before touching Firestore
+      await expect(firebaseProvider.deleteAccountAndData('uid-alice')).rejects.toThrow(
+        /enter your current password/i,
+      );
+      expect(firestoreMocks.writeBatch).not.toHaveBeenCalled();
+      expect(firebaseMocks.deleteUser).not.toHaveBeenCalled();
+      expect(mockState.docs.has('profiles/uid-alice')).toBe(true);
+      expect(mockState.docs.has('decks/d-alice')).toBe(true);
+
+      // Wrong password fails reauth and leaves Firestore + Auth intact
+      mockState.injectedError = {
+        op: 'reauthenticateWithCredential',
+        error: { code: 'auth/wrong-password', message: 'Firebase: Error (auth/wrong-password).' },
+      };
+      await expect(
+        firebaseProvider.deleteAccountAndData('uid-alice', 'WrongPass!'),
+      ).rejects.toThrow(/Incorrect password/i);
+      expect(firestoreMocks.writeBatch).not.toHaveBeenCalled();
+      expect(firebaseMocks.deleteUser).not.toHaveBeenCalled();
+      expect(mockState.docs.has('profiles/uid-alice')).toBe(true);
+      expect(mockState.docs.has('handles/alice_mtg')).toBe(true);
+      expect(mockState.docs.has('decks/d-alice')).toBe(true);
+    });
+
+    it('deleteAccountAndData reauthenticates Google users via popup BEFORE deleting Firestore docs and aborts cleanly on popup cancellation', async () => {
+      mockState.auth.currentUser = {
+        uid: 'uid-google',
+        email: 'planeswalker@gmail.com',
+        emailVerified: true,
+        displayName: 'google_mage',
+        providerData: [{ providerId: 'google.com' }],
+      };
+      memoryStorage.setItem(getPendingHandleStorageKey('uid-google'), 'google_mage');
+      mockState.docs.set('profiles/uid-google', {
+        uid: 'uid-google',
+        handle: 'google_mage',
+        handleLower: 'google_mage',
+        displayName: 'Google Mage',
+        createdAt: '2026-11-10T00:00:00.000Z',
+        updatedAt: '2026-11-10T00:00:00.000Z',
+      });
+      mockState.docs.set('handles/google_mage', { uid: 'uid-google', handle: 'google_mage' });
+      mockState.docs.set('friendCatalogs/uid-google', {
+        ownerUid: 'uid-google',
+        ownerHandle: 'google_mage',
+        updatedAt: '2026-11-10T00:00:00.000Z',
+        decks: [],
+      });
+      mockState.docs.set(
+        'decks/d-google',
+        makeSampleCloudDeck({ id: 'd-google', ownerUid: 'uid-google' }) as unknown as StoredDoc,
+      );
+      mockState.docs.set(
+        'cardlists/l-google',
+        makeSampleCloudList({ id: 'l-google', ownerUid: 'uid-google' }) as unknown as StoredDoc,
+      );
+      mockState.docs.set('friendships/uid-bob_uid-google', {
+        id: 'uid-bob_uid-google',
+        users: ['uid-bob', 'uid-google'],
+        requestedBy: 'uid-bob',
+        status: 'accepted',
+        createdAt: '2026-11-10T00:00:00.000Z',
+        updatedAt: '2026-11-10T00:00:00.000Z',
+      });
+
+      // Case 1: User closes the popup -> abort cleanly with ALL Firestore docs & Auth preserved
+      mockState.injectedError = {
+        op: 'reauthenticateWithPopup',
+        error: {
+          code: 'auth/popup-closed-by-user',
+          message: 'Firebase: Error (auth/popup-closed-by-user).',
+        },
+      };
+
+      await expect(firebaseProvider.deleteAccountAndData('uid-google')).rejects.toThrow(
+        /popup was closed before completing/i,
+      );
+      expect(firebaseMocks.reauthenticateWithPopup).toHaveBeenCalledTimes(1);
+      expect(firestoreMocks.getDoc).not.toHaveBeenCalled();
+      expect(firestoreMocks.getDocs).not.toHaveBeenCalled();
+      expect(firestoreMocks.writeBatch).not.toHaveBeenCalled();
+      expect(firebaseMocks.deleteUser).not.toHaveBeenCalled();
+      expect(mockState.auth.currentUser).not.toBeNull();
+      expect(mockState.docs.has('profiles/uid-google')).toBe(true);
+      expect(mockState.docs.has('handles/google_mage')).toBe(true);
+      expect(mockState.docs.has('friendCatalogs/uid-google')).toBe(true);
+      expect(mockState.docs.has('decks/d-google')).toBe(true);
+      expect(mockState.docs.has('cardlists/l-google')).toBe(true);
+      expect(mockState.docs.has('friendships/uid-bob_uid-google')).toBe(true);
+      expect(memoryStorage.getItem(getPendingHandleStorageKey('uid-google'))).toBe('google_mage');
+
+      // Case 2: Popup reauth succeeds -> deletes Firestore docs first, then Auth user
+      mockState.injectedError = null;
+      await firebaseProvider.deleteAccountAndData('uid-google');
+
+      expect(firebaseMocks.reauthenticateWithPopup).toHaveBeenCalledTimes(2);
+      expect(firebaseMocks.reauthenticateWithPopup.mock.invocationCallOrder[1]).toBeLessThan(
+        firestoreMocks.writeBatch.mock.invocationCallOrder[0]!,
+      );
+      expect(firestoreMocks.writeBatch.mock.invocationCallOrder[0]).toBeLessThan(
+        firebaseMocks.deleteUser.mock.invocationCallOrder[0]!,
+      );
+      expect(mockState.docs.has('profiles/uid-google')).toBe(false);
+      expect(mockState.docs.has('handles/google_mage')).toBe(false);
+      expect(mockState.docs.has('friendCatalogs/uid-google')).toBe(false);
+      expect(mockState.docs.has('decks/d-google')).toBe(false);
+      expect(mockState.docs.has('cardlists/l-google')).toBe(false);
+      expect(mockState.docs.has('friendships/uid-bob_uid-google')).toBe(false);
+      expect(mockState.auth.currentUser).toBeNull();
+      expect(memoryStorage.getItem(getPendingHandleStorageKey('uid-google'))).toBeNull();
     });
   });
 

@@ -219,6 +219,14 @@ export function AccountModal({
     }
   };
 
+  const handleSyncNowClick = async () => {
+    try {
+      await onSyncNow();
+    } catch {
+      // Parent surfaces error via `error` prop
+    }
+  };
+
   const handleExportClick = async () => {
     setExportingData(true);
     try {
@@ -446,7 +454,7 @@ export function AccountModal({
               <button
                 type="button"
                 disabled={isSyncing || !user.emailVerified}
-                onClick={() => void onSyncNow()}
+                onClick={() => void handleSyncNowClick()}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-sky-500 px-3.5 py-1.5 font-semibold text-slate-950 transition hover:bg-sky-400 disabled:opacity-45"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />

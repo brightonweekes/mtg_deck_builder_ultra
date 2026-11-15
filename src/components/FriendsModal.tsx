@@ -69,6 +69,19 @@ const VISIBILITY_META: Readonly<Record<DeckVisibility, { label: string; classNam
   },
 };
 
+function invokeSafely(action: () => Promise<void> | void): void {
+  try {
+    const result = action();
+    if (result && typeof (result as Promise<unknown>).catch === 'function') {
+      void (result as Promise<unknown>).catch(() => {
+        // Parent hook surfaces error state via the `error` prop.
+      });
+    }
+  } catch {
+    // Guard against synchronous throws in parent callbacks.
+  }
+}
+
 function getOtherMember(
   record: FriendshipRecord,
   myUid: string,
@@ -321,7 +334,7 @@ export function FriendsModal({
     }
     setExpandedFriendUid(friendUid);
     if (friendDecksByUid[friendUid] === undefined) {
-      void onLoadFriendDecks(friendUid);
+      invokeSafely(() => onLoadFriendDecks(friendUid));
     }
   };
 
@@ -514,7 +527,7 @@ export function FriendsModal({
                             <button
                               type="button"
                               disabled={isBusy}
-                              onClick={() => void onAcceptFriendRequest(req.id)}
+                              onClick={() => invokeSafely(() => onAcceptFriendRequest(req.id))}
                               className="inline-flex items-center gap-1 rounded-lg bg-emerald-500 px-3 py-1.5 font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:opacity-50"
                             >
                               <Check className="h-3.5 w-3.5" />
@@ -523,7 +536,7 @@ export function FriendsModal({
                             <button
                               type="button"
                               disabled={isBusy}
-                              onClick={() => void onRemoveFriendship(req.id)}
+                              onClick={() => invokeSafely(() => onRemoveFriendship(req.id))}
                               className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 font-semibold text-slate-300 transition hover:border-rose-500/50 hover:text-rose-200 disabled:opacity-50"
                             >
                               Decline
@@ -563,7 +576,7 @@ export function FriendsModal({
                           <button
                             type="button"
                             disabled={isBusy}
-                            onClick={() => void onRemoveFriendship(req.id)}
+                            onClick={() => invokeSafely(() => onRemoveFriendship(req.id))}
                             className="rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-slate-300 transition hover:border-rose-500/50 hover:text-rose-200 disabled:opacity-50"
                           >
                             Cancel
@@ -639,7 +652,7 @@ export function FriendsModal({
                                     disabled={isRemoving}
                                     onClick={() => {
                                       setConfirmRemovePairId(null);
-                                      void onRemoveFriendship(friend.id);
+                                      invokeSafely(() => onRemoveFriendship(friend.id));
                                     }}
                                     className="rounded-lg bg-rose-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-rose-500 disabled:opacity-50"
                                   >
@@ -676,7 +689,7 @@ export function FriendsModal({
                                 <button
                                   type="button"
                                   disabled={isLoadingDecks}
-                                  onClick={() => void onLoadFriendDecks(other.uid)}
+                                  onClick={() => invokeSafely(() => onLoadFriendDecks(other.uid))}
                                   className="inline-flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-[11px] font-medium text-slate-300 hover:border-sky-400/50 hover:text-sky-200 disabled:opacity-50"
                                 >
                                   <RefreshCw
@@ -703,8 +716,8 @@ export function FriendsModal({
                                       deck={deck}
                                       busy={busyId === deck.id}
                                       commanderNamesById={commanderNamesById}
-                                      onView={() => void onOpenSharedDeck(deck.id)}
-                                      onClone={() => void onCloneSharedDeck(deck.id)}
+                                      onView={() => invokeSafely(() => onOpenSharedDeck(deck.id))}
+                                      onClone={() => invokeSafely(() => onCloneSharedDeck(deck.id))}
                                     />
                                   ))}
                                 </div>

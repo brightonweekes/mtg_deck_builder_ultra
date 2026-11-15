@@ -6,6 +6,7 @@ import {
   GoogleAuthProvider,
   onAuthStateChanged as fbOnAuthStateChanged,
   reauthenticateWithCredential as fbReauthenticateWithCredential,
+  reauthenticateWithPopup as fbReauthenticateWithPopup,
   reload as fbReload,
   sendEmailVerification as fbSendEmailVerification,
   sendPasswordResetEmail as fbSendPasswordResetEmail,
@@ -128,6 +129,7 @@ export interface FirebaseAuthOps {
   sendPasswordResetEmail: (auth: Auth, email: string) => Promise<void>;
   signOut: (auth: Auth) => Promise<void>;
   reauthenticateWithCredential: (user: User, credential: AuthCredential) => Promise<UserCredential>;
+  reauthenticateWithPopup: (user: User, provider: AuthProvider) => Promise<UserCredential>;
   deleteUser: (user: User) => Promise<void>;
 }
 
@@ -196,6 +198,7 @@ const DEFAULT_AUTH_OPS: FirebaseAuthOps = {
   signOut: (auth) => fbSignOut(auth),
   reauthenticateWithCredential: (user, credential) =>
     fbReauthenticateWithCredential(user, credential),
+  reauthenticateWithPopup: (user, provider) => fbReauthenticateWithPopup(user, provider),
   deleteUser: (user) => fbDeleteUser(user),
 };
 
@@ -890,8 +893,15 @@ export class FirebaseCloudProvider implements CloudProvider {
         const existingProfileData = profileSnap.exists() ? profileSnap.data() : undefined;
         const oldLower =
           typeof existingProfileData?.handleLower === 'string'
-            ? existingProfileData.handleLower
+            ? existingProfileData.handleLower.trim().toLowerCase()
             : null;
+
+        let oldHandleRef: DocumentReference<DocumentData> | null = null;
+        let oldHandleSnap: DocumentSnapshot<DocumentData> | null = null;
+        if (oldLower && !oldLower.includes('/') && oldLower !== handleLower) {
+          oldHandleRef = this.deps.firestoreOps.doc(db, 'handles', oldLower);
+          oldHandleSnap = await tx.get(oldHandleRef);
+        }
 
         const nowIso = new Date().toISOString();
         const createdAt = ensureTimestampString(existingProfileData?.createdAt, nowIso);
@@ -913,8 +923,8 @@ export class FirebaseCloudProvider implements CloudProvider {
               ? clampTextForRules(existingProfileData.avatarCommanderId, 80, 160)
               : null;
 
-        if (oldLower && oldLower !== handleLower) {
-          tx.delete(this.deps.firestoreOps.doc(db, 'handles', oldLower));
+        if (oldHandleRef && oldHandleSnap?.exists() && oldHandleSnap.data()?.uid === uid) {
+          tx.delete(oldHandleRef);
         }
 
         // /handles allow update: if false in firestore.rules, so only create when doc does not yet exist.
@@ -965,7 +975,7 @@ export class FirebaseCloudProvider implements CloudProvider {
       if (sinceIso) {
         constraints.push(
           this.deps.firestoreOps.where('updatedAt', '>', sinceIso),
-          this.deps.firestoreOps.orderBy('updatedAt', 'asc'),
+          this.deps.firestoreOps.orderBy('updatedAt', 'desc'),
         );
       }
 
@@ -1334,13 +1344,46 @@ export class FirebaseCloudProvider implements CloudProvider {
       throw new Error('You must be signed in as this account to delete it.');
     }
 
+    const providerIds = Array.isArray(currentUser.providerData)
+      ? currentUser.providerData
+          .map((info) => info?.providerId)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : [];
+    const hasPasswordProvider = providerIds.includes('password');
+    const hasGoogleProvider = providerIds.includes('google.com');
+
     try {
-      if (reauthPassword && currentUser.email) {
+      // Re-authenticate BEFORE deleting any Firestore data so `auth/requires-recent-login`
+      // or a cancelled popup never wipes cloud documents while leaving the Auth account intact.
+      if (typeof reauthPassword === 'string' && reauthPassword.length > 0) {
+        if (!currentUser.email) {
+          throw new Error('Cannot verify password because this account has no email address.');
+        }
         const credential = this.deps.authOps.createEmailCredential(
           currentUser.email,
           reauthPassword,
         );
         await this.deps.authOps.reauthenticateWithCredential(currentUser, credential);
+      } else if (hasGoogleProvider) {
+        if (typeof this.deps.authOps.reauthenticateWithPopup !== 'function') {
+          throw new CloudProviderError({
+            code: 'auth/requires-recent-login',
+            message: 'Please sign in again with Google before deleting your account.',
+            isQuotaOrRateLimit: false,
+            isOffline: false,
+            requiresRecentLogin: true,
+          });
+        }
+        const googleProvider = this.deps.authOps.createGoogleAuthProvider();
+        await this.deps.authOps.reauthenticateWithPopup(currentUser, googleProvider);
+      } else if (hasPasswordProvider) {
+        throw new CloudProviderError({
+          code: 'auth/requires-recent-login',
+          message: 'Please enter your current password to confirm account deletion.',
+          isQuotaOrRateLimit: false,
+          isOffline: false,
+          requiresRecentLogin: true,
+        });
       }
 
       if (currentUser.emailVerified) {
@@ -1391,8 +1434,8 @@ export class FirebaseCloudProvider implements CloudProvider {
         await this.commitBatchDeletes(db, refsToDelete);
       }
 
-      clearPendingHandleFromStorage(uid, this.getStorage());
       await this.deps.authOps.deleteUser(currentUser);
+      clearPendingHandleFromStorage(uid, this.getStorage());
     } catch (err) {
       throw toCloudError(err);
     }
