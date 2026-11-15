@@ -54,6 +54,14 @@ When you want **multi-device deck sync**, **binders/wishlists/trade lists**, **s
 
 > **Email Verification Required:** `firestore.rules` strictly requires `email_verified == true` for all account writes, profile lookups, friend connections, and private/friend deck reads. Google Sign-In verifies emails automatically; Email/Password sign-ups receive a verification email before cloud sync unlocks.
 
+### 3.3 Enable Email Enumeration Protection & Password Policy
+
+1. Open **Build → Authentication → Settings → User actions** in the Firebase Console and confirm **Email enumeration protection** is **Enabled** (recommended so sign-in/reset endpoints never reveal whether an email address is registered).
+2. Open **Build → Authentication → Settings → Password policy**, enable policy enforcement, and configure server-side strength rules matching the app:
+   - **Minimum length:** `8` characters (maximum `128`)
+   - **Require character types:** uppercase, lowercase, and numeric or non-alphanumeric characters
+   - Enable enforcement on **Sign-up and password updates**.
+
 ---
 
 ## 4. Add Authorized Domains (Cloudflare Pages & Custom Domains)
@@ -184,3 +192,4 @@ To add extra protection against automated abuse or script scraping against your 
 - **Immutable Handle Claims & Reserved Names:** Handles (`/handles/{handleLower}`) enforce lowercase uniqueness (`^[a-z0-9_-]{3,24}$`), block reserved names (`admin`, `system`, `support`, `moderator`, `wizards`, `official`), and cannot be hijacked or enumerated via `list`.
 - **Mutual Friend Verification:** Friend-only decks and `/friendCatalogs/{uid}` verify an `accepted` friendship document at deterministic ID `pairId(uidA, uidB)` before allowing access, and only the *recipient* of a pending request can transition `pending -> accepted`.
 - **Schema & Size Guardrails:** Every write validates field whitelists, visibility enums (`private`, `friends`, `link`, `public`), bounded array/map counts, and UTF-8 string byte caps, with a bottom catch-all `allow read, write: if false;` rule denying all unmapped paths.
+- **Recommended Production Bot & Quota Protection:** For public or high-traffic deployments, configure and **Enforce** **Firebase App Check (reCAPTCHA v3)** on Cloud Firestore and Firebase Authentication (see Section 8) so automated scripts cannot drain your Spark daily read/write quotas.

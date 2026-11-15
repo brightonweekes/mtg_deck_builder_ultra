@@ -762,9 +762,9 @@ describe('App Cloud Sync Integration', () => {
     const bundle = await controller.exportAllData();
     expect(bundle.decks.map((d) => d.id).sort()).toEqual([
       'alice-cloud-deck',
-      'bob-cached-deck',
       'local-guest-deck',
     ]);
+    expect(bundle.decks.map((d) => d.id)).not.toContain('bob-cached-deck');
     expect(createElementSpy).not.toHaveBeenCalled();
     expect(createObjectUrlSpy).not.toHaveBeenCalled();
 

@@ -670,6 +670,22 @@ describe('firebaseConfig & FirebaseCloudProvider', () => {
       expect(getIdTokenSpy).toHaveBeenCalledWith(true);
       expect(reloaded?.emailVerified).toBe(true);
     });
+
+    it('signOut clears pending handle from localStorage even when signing out before email verification', async () => {
+      mockState.auth.currentUser = {
+        uid: 'uid-unverified-1',
+        email: 'unverified@example.com',
+        emailVerified: false,
+        displayName: 'pending_mage',
+        providerData: [{ providerId: 'password' }],
+      };
+      memoryStorage.setItem(getPendingHandleStorageKey('uid-unverified-1'), 'pending_mage');
+
+      await firebaseProvider.signOut();
+
+      expect(firebaseMocks.signOut).toHaveBeenCalledWith(mockState.auth);
+      expect(memoryStorage.getItem(getPendingHandleStorageKey('uid-unverified-1'))).toBeNull();
+    });
   });
 
   describe('Handles & Profiles', () => {
@@ -1130,7 +1146,7 @@ describe('firebaseConfig & FirebaseCloudProvider', () => {
       };
       await expect(
         firebaseProvider.deleteAccountAndData('uid-alice', 'WrongPass!'),
-      ).rejects.toThrow(/Incorrect password/i);
+      ).rejects.toThrow(/Incorrect email or password/i);
       expect(firestoreMocks.writeBatch).not.toHaveBeenCalled();
       expect(firebaseMocks.deleteUser).not.toHaveBeenCalled();
       expect(mockState.docs.has('profiles/uid-alice')).toBe(true);

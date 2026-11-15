@@ -27,6 +27,7 @@ export interface CreateCardListInput {
 export interface ListCardListsOptions {
   includeDeleted?: boolean;
   listType?: CardListType;
+  activeUid?: string | null;
 }
 
 export interface ParsedCardListLine {
@@ -251,11 +252,16 @@ export async function listCardLists(
   const options = isMtgDatabase(dbOrOptions) ? maybeOptions : dbOrOptions;
   const includeDeleted = options?.includeDeleted ?? false;
   const listType = options?.listType;
+  const hasActiveUidFilter = options?.activeUid !== undefined;
+  const activeUid = options?.activeUid ?? null;
 
   const all = await db.cardlists.toArray();
   const filtered = all.filter((record) => {
     if (!includeDeleted && record.deletedAt) return false;
     if (listType && record.listType !== listType) return false;
+    if (hasActiveUidFilter && record.ownerUid && record.ownerUid !== activeUid) {
+      return false;
+    }
     return true;
   });
   return filtered.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));

@@ -21,9 +21,11 @@ import {
   MAX_DECK_NAME_LEN,
   MAX_DISPLAY_NAME_LEN,
   MAX_MAINBOARD_KEYS,
+  MAX_PASSWORD_LEN,
   MAX_SHARED_WITH_UIDS,
   MAX_SIDEBOARD_KEYS,
   MAX_SYNERGY_THEMES,
+  MIN_PASSWORD_LEN,
   normalizeHandle,
   parseCloudUrlIntents,
   RESERVED_HANDLES,
@@ -166,10 +168,20 @@ describe('cloud validation — email & password', () => {
   it('validates passwords >= 8 chars and scores entropy without requiring symbols', () => {
     expect(validatePassword('')).toMatchObject({ valid: false, score: 0 });
     expect(validatePassword('short7')).toMatchObject({ valid: false, score: 0 });
+    expect(validatePassword('a'.repeat(MIN_PASSWORD_LEN - 1))).toMatchObject({ valid: false, score: 0 });
+    expect(validatePassword(`${'A1!a'.repeat(32)}x`)).toMatchObject({
+      valid: false,
+      score: 0,
+      error: expect.stringContaining(String(MAX_PASSWORD_LEN)),
+    });
+    expect(validatePassword('A1!a'.repeat(32))).toMatchObject({ valid: true, score: 3 });
     expect(validatePassword('aaaaaaaa')).toMatchObject({ valid: false, score: 0 });
     expect(validatePassword('abababab')).toMatchObject({ valid: false, score: 0 });
     expect(validatePassword('password')).toMatchObject({ valid: false, score: 0 });
     expect(validatePassword('12345678')).toMatchObject({ valid: false, score: 0 });
+    expect(validatePassword('planeswalker')).toMatchObject({ valid: false, score: 0 });
+    expect(validatePassword('Commander')).toMatchObject({ valid: false, score: 0 });
+    expect(validatePassword('blacklotus')).toMatchObject({ valid: false, score: 0 });
 
     const basic = validatePassword('manaflux');
     expect(basic.valid).toBe(true);
@@ -502,14 +514,14 @@ describe('cloud validation — humanizeCloudError', () => {
         isQuotaOrRateLimit: false,
         isOffline: false,
         requiresRecentLogin: false,
-        messageRegex: /incorrect password/i,
+        messageRegex: /incorrect email or password/i,
       },
       {
         code: 'auth/user-not-found',
         isQuotaOrRateLimit: false,
         isOffline: false,
         requiresRecentLogin: false,
-        messageRegex: /no account/i,
+        messageRegex: /incorrect email or password/i,
       },
       {
         code: 'auth/too-many-requests',
@@ -600,7 +612,13 @@ describe('cloud validation — humanizeCloudError', () => {
 
     const embedded = humanizeCloudError(new Error('Firebase: Error (auth/wrong-password).'));
     expect(embedded.code).toBe('auth/wrong-password');
-    expect(embedded.message).toMatch(/incorrect password/i);
+    expect(embedded.message).toMatch(/incorrect email or password/i);
+    expect(humanizeCloudError({ code: 'auth/wrong-password' }).message).toBe(
+      humanizeCloudError({ code: 'auth/user-not-found' }).message,
+    );
+    expect(humanizeCloudError({ code: 'auth/user-not-found' }).message).toBe(
+      humanizeCloudError({ code: 'auth/invalid-credential' }).message,
+    );
 
     const generic = humanizeCloudError(new Error('Deck payload too large'));
     expect(generic).toEqual({
@@ -736,11 +754,42 @@ describe('cloud validation — firestore.rules parity & null-resource safety', (
   });
 
   it('guards allow get and delete/update rules against null-resource crashes while keeping list non-enumerable', () => {
+    const profilesBlock = extractRulesSection('match /profiles/{uid}', 'match /handles');
+    expect(profilesBlock).toMatch(/allow get:\s*if isVerified\(\);/);
+    expect(profilesBlock).toMatch(/allow list:\s*if false;/);
+
     const handlesBlock = extractRulesSection('match /handles/{handleLower}', 'match /friendships');
-    expect(handlesBlock).toMatch(/allow get:\s*if isSignedIn\(\);/);
+    expect(handlesBlock).toMatch(/allow get:\s*if isVerified\(\);/);
     expect(handlesBlock).toMatch(/allow list:\s*if false;/);
+    expect(handlesBlock).toMatch(/existsAfter\(callerProfilePath\(\)\)/);
+    expect(handlesBlock).toMatch(/getAfter\(callerProfilePath\(\)\)\.data\.handleLower == handleLower/);
     expect(handlesBlock).toMatch(/allow update:\s*if false;/);
     expect(handlesBlock).toMatch(/allow delete:\s*if isVerified\(\) && resource != null &&/);
+    expect(handlesBlock).toMatch(/getAfter\(callerProfilePath\(\)\)\.data\.handleLower != handleLower/);
+
+    const friendshipFn = extractRulesSection(
+      'function isValidFriendshipCreate',
+      'function isValidFriendshipAccept',
+    );
+    expect(friendshipFn).toContain('callerOwnsHandle(data.userHandles[request.auth.uid])');
+
+    const catalogFn = extractRulesSection(
+      'function isValidFriendCatalog',
+      'function isValidDeckDoc',
+    );
+    expect(catalogFn).toContain('callerOwnsHandle(data.ownerHandle)');
+
+    const deckValidationFn = extractRulesSection(
+      'function isValidDeckDoc',
+      'function isValidCardListDoc',
+    );
+    expect(deckValidationFn).toContain('callerOwnsHandle(data.ownerHandle)');
+
+    const cardListValidationFn = extractRulesSection(
+      'function isValidCardListDoc',
+      '// Collection Rules',
+    );
+    expect(cardListValidationFn).toContain('callerOwnsHandle(data.ownerHandle)');
 
     const friendshipsBlock = extractRulesSection(
       'match /friendships/{pairDocId}',

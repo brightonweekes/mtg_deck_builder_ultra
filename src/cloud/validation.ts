@@ -14,6 +14,8 @@ export interface CardListEntry {
 export const HANDLE_MIN_LEN = 3;
 export const HANDLE_MAX_LEN = 24;
 export const HANDLE_REGEX = /^[a-zA-Z0-9_-]+$/;
+export const MIN_PASSWORD_LEN = 8;
+export const MAX_PASSWORD_LEN = 128;
 
 export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   'admin',
@@ -98,15 +100,25 @@ const ALNUM_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const COMMON_WEAK_PASSWORDS: ReadonlySet<string> = new Set([
   'password',
   'password1',
+  'password1!',
   'password123',
   '12345678',
   '123456789',
   '1234567890',
   'qwertyui',
+  'qwertyuiop',
   'qwerty123',
   'letmein1',
   'iloveyou',
   'admin123',
+  'welcome1',
+  'monkey123',
+  'dragon123',
+  'mtgarena',
+  'commander',
+  'planeswalker',
+  'magic123',
+  'blacklotus',
 ]);
 
 export interface HandleValidationResult {
@@ -214,10 +226,10 @@ const CLOUD_ERROR_MAP: Readonly<Record<string, CloudErrorDescriptor>> = {
     message: 'Incorrect email or password. Please check your credentials and try again.',
   },
   'auth/wrong-password': {
-    message: 'Incorrect password. Please try again or reset your password.',
+    message: 'Incorrect email or password. Please check your credentials and try again.',
   },
   'auth/user-not-found': {
-    message: 'No account was found with that email address.',
+    message: 'Incorrect email or password. Please check your credentials and try again.',
   },
   'auth/too-many-requests': {
     message: 'Too many requests in a short time. Please wait a moment before trying again.',
@@ -523,11 +535,19 @@ export function validatePassword(password: string): PasswordValidationResult {
     };
   }
 
-  if (password.length < 8) {
+  if (password.length < MIN_PASSWORD_LEN) {
     return {
       valid: false,
       score: 0,
-      error: 'Password must be at least 8 characters.',
+      error: `Password must be at least ${MIN_PASSWORD_LEN} characters.`,
+    };
+  }
+
+  if (password.length > MAX_PASSWORD_LEN) {
+    return {
+      valid: false,
+      score: 0,
+      error: `Password must be ${MAX_PASSWORD_LEN} characters or fewer.`,
     };
   }
 

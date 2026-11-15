@@ -140,7 +140,7 @@ export function AccountModal({
   const [handleSaved, setHandleSaved] = useState(false);
   const [handleLocalError, setHandleLocalError] = useState<string | null>(null);
   const [exportingData, setExportingData] = useState(false);
-  const [clearLocalCopies, setClearLocalCopies] = useState(false);
+  const [clearLocalCopies, setClearLocalCopies] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
   const [dangerExpanded, setDangerExpanded] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -165,6 +165,7 @@ export function AccountModal({
     setDisplayNameInput(profile?.displayName ?? user.displayName ?? '');
     setHandleSaved(false);
     setHandleLocalError(null);
+    setClearLocalCopies(true);
     setDangerExpanded(false);
     setDeleteConfirmText('');
     setReauthPassword('');

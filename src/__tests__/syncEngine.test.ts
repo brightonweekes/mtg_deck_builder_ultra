@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getPendingHandleStorageKey } from '../cloud/firebaseProvider.js';
 import {
   CloudSyncEngine,
   buildAccountExportBundle,
@@ -1237,7 +1238,9 @@ describe('CloudSyncEngine & Offline-First Cross-Device Sync', () => {
     expect(bundle.schemaVersion).toBe(1);
     expect(bundle.profile).toEqual(profile);
     expect(bundle.decks.map((d) => d.id)).not.toContain('alice-deleted');
+    expect(bundle.decks.map((d) => d.id)).not.toContain('bob-deck');
     expect(bundle.decks.map((d) => d.id)).toContain('alice-active');
+    expect(bundle.decks.map((d) => d.id)).toContain('guest-only');
     expect(bundle.cardlists.map((l) => l.id)).not.toContain('alice-list-deleted');
     expect(bundle.cardlists.map((l) => l.id)).toContain('alice-list-active');
 
@@ -1267,6 +1270,108 @@ describe('CloudSyncEngine & Offline-First Cross-Device Sync', () => {
     expect(await getSavedDeckRecord('guest-only', db)).toBeDefined();
     expect(await getSavedDeckRecord('bob-deck', db)).toBeDefined();
     expect(await getCardList('guest-list', db)).toBeDefined();
+  });
+
+  it('isolates listSavedDeckRecords and listCardLists by activeUid and cleans localStorage handle and active draft on sign-out', async () => {
+    const db = createTestDb('multi-user-isolation');
+    await db.decks.bulkPut([
+      {
+        id: 'alice-deck',
+        name: 'Alice Deck',
+        commanderIds: [marwynV1.id],
+        mainboard: { [solRingV1.id]: 1 },
+        sideboard: {},
+        ownerUid: 'uid-alice',
+        syncStatus: 'synced',
+        revision: 1,
+        deletedAt: null,
+        createdAt: '2026-11-14T10:00:00.000Z',
+        updatedAt: '2026-11-14T10:00:00.000Z',
+      },
+      {
+        id: 'bob-deck',
+        name: 'Bob Deck',
+        commanderIds: [],
+        mainboard: { [solRingV1.id]: 1 },
+        sideboard: {},
+        ownerUid: 'uid-bob',
+        syncStatus: 'synced',
+        revision: 1,
+        deletedAt: null,
+        createdAt: '2026-11-14T10:05:00.000Z',
+        updatedAt: '2026-11-14T10:05:00.000Z',
+      },
+      {
+        id: 'guest-deck',
+        name: 'Guest Deck',
+        commanderIds: [],
+        mainboard: { [solRingV1.id]: 1 },
+        sideboard: {},
+        ownerUid: null,
+        syncStatus: 'local',
+        revision: 0,
+        deletedAt: null,
+        createdAt: '2026-11-14T09:00:00.000Z',
+        updatedAt: '2026-11-14T09:00:00.000Z',
+      },
+    ]);
+
+    await createCardList(
+      { id: 'alice-list', name: 'Alice List', listType: 'wishlist', ownerUid: 'uid-alice' },
+      db,
+    );
+    await createCardList(
+      { id: 'bob-list', name: 'Bob List', listType: 'wishlist', ownerUid: 'uid-bob' },
+      db,
+    );
+    await createCardList(
+      { id: 'guest-list', name: 'Guest List', listType: 'collection', ownerUid: null },
+      db,
+    );
+
+    const aliceDecks = await listSavedDeckRecords(db, { activeUid: 'uid-alice' });
+    expect(aliceDecks.map((d) => d.id)).toEqual(['alice-deck', 'guest-deck']);
+
+    const guestOnlyDecks = await listSavedDeckRecords(db, { activeUid: null });
+    expect(guestOnlyDecks.map((d) => d.id)).toEqual(['guest-deck']);
+
+    const aliceLists = await listCardLists(db, { activeUid: 'uid-alice' });
+    expect(aliceLists.map((l) => l.id).sort()).toEqual(['alice-list', 'guest-list']);
+
+    const guestOnlyLists = await listCardLists(db, { activeUid: null });
+    expect(guestOnlyLists.map((l) => l.id)).toEqual(['guest-list']);
+
+    const store = new Map<string, string>();
+    const mockStorage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+    };
+    vi.stubGlobal('window', { localStorage: mockStorage });
+
+    try {
+      const pendingKey = getPendingHandleStorageKey('uid-alice');
+      store.set(pendingKey, 'alice_mtg');
+      store.set('mtg_ultra_active_deck_v1', JSON.stringify({ id: 'alice-deck', ownerUid: 'uid-alice' }));
+
+      await cleanupOnSignOut('uid-alice', false, db);
+      expect(store.has(pendingKey)).toBe(false);
+      expect(store.has('mtg_ultra_active_deck_v1')).toBe(true);
+
+      await cleanupOnSignOut('uid-alice', true, db);
+      expect(store.has('mtg_ultra_active_deck_v1')).toBe(false);
+
+      // Should not delete another user's or guest's active draft in localStorage
+      store.set('mtg_ultra_active_deck_v1', JSON.stringify({ id: 'bob-deck', ownerUid: 'uid-bob' }));
+      await cleanupOnSignOut('uid-alice', true, db);
+      expect(store.has('mtg_ultra_active_deck_v1')).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('serializes overlapping syncAll, pushPending, and pullUpdates calls without duplicate pushes or self-conflicts', async () => {

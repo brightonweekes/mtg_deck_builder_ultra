@@ -17,6 +17,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify no secrets or env files are tracked
+        run: |
+          TRACKED_ENV=$(git ls-files '.env' '.env.*' ':!.env.example')
+          TRACKED_KEYS=$(git ls-files '*firebase-adminsdk*.json' 'service-account*.json')
+          if [ -n "$TRACKED_ENV" ] || [ -n "$TRACKED_KEYS" ]; then
+            echo "Error: Secret or environment files are tracked in git:"
+            echo "$TRACKED_ENV"
+            echo "$TRACKED_KEYS"
+            exit 1
+          fi
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:

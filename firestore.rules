@@ -14,6 +14,18 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
+    function callerProfilePath() {
+      return /databases/$(database)/documents/profiles/$(request.auth.uid);
+    }
+
+    function callerOwnsHandle(handle) {
+      return handle is string
+        && (
+          (exists(callerProfilePath()) && get(callerProfilePath()).data.handle == handle)
+          || (existsAfter(callerProfilePath()) && getAfter(callerProfilePath()).data.handle == handle)
+        );
+    }
+
     // Deterministic lexicographically sorted friendship pair ID: "<smallerUid>_<largerUid>"
     function pairId(a, b) {
       return a < b ? a + '_' + b : b + '_' + a;
@@ -163,7 +175,11 @@ service cloud.firestore {
         && pairDocId == pairId(data.users[0], data.users[1])
         && (
           !('userHandles' in data)
-          || (data.userHandles is map && data.userHandles.size() <= 2)
+          || (
+            data.userHandles is map
+            && data.userHandles.size() <= 2
+            && (!(request.auth.uid in data.userHandles) || callerOwnsHandle(data.userHandles[request.auth.uid]))
+          )
         )
         && isTimestampString(data.createdAt)
         && isTimestampString(data.updatedAt);
@@ -217,6 +233,7 @@ service cloud.firestore {
         && data.ownerHandle is string
         && data.ownerHandle.size() <= 24
         && data.ownerHandle.toUtf8().size() <= 96
+        && callerOwnsHandle(data.ownerHandle)
         && isTimestampString(data.updatedAt)
         && data.decks is list
         && data.decks.size() <= 200;
@@ -268,6 +285,7 @@ service cloud.firestore {
         && data.ownerHandle is string
         && data.ownerHandle.size() <= 24
         && data.ownerHandle.toUtf8().size() <= 96
+        && callerOwnsHandle(data.ownerHandle)
         && data.name is string
         && data.name.size() >= 1
         && data.name.size() <= 120
@@ -350,10 +368,12 @@ service cloud.firestore {
         && data.ownerUid == request.auth.uid
         && (
           !('ownerHandle' in data)
+          || data.ownerHandle == null
           || (
             data.ownerHandle is string
             && data.ownerHandle.size() <= 24
             && data.ownerHandle.toUtf8().size() <= 96
+            && callerOwnsHandle(data.ownerHandle)
           )
         )
         && data.name is string
@@ -392,9 +412,10 @@ service cloud.firestore {
     // Collection Rules
     // -------------------------------------------------------------------------
 
-    // Public user profiles (strictly NO email field; readable by verified accounts)
+    // Public user profiles (strictly NO email field; single-doc lookup by verified accounts; no collection listing)
     match /profiles/{uid} {
-      allow get, list: if isVerified();
+      allow get: if isVerified();
+      allow list: if false;
       allow create, update: if isVerified()
         && request.auth.uid == uid
         && isValidProfile(uid, request.resource.data);
@@ -403,12 +424,14 @@ service cloud.firestore {
 
     // Case-insensitive handle uniqueness claims
     match /handles/{handleLower} {
-      allow get: if isSignedIn();
+      allow get: if isVerified();
       allow list: if false;
       allow create: if isVerified()
         && handleLower.matches('^[a-z0-9_-]{3,24}$')
         && !isReservedHandle(handleLower)
         && !exists(/databases/$(database)/documents/handles/$(handleLower))
+        && existsAfter(callerProfilePath())
+        && getAfter(callerProfilePath()).data.handleLower == handleLower
         && request.resource.data.keys().hasAll(['uid'])
         && request.resource.data.keys().hasOnly([
           'uid',
@@ -443,7 +466,8 @@ service cloud.firestore {
           || isTimestampString(request.resource.data.updatedAt)
         );
       allow update: if false;
-      allow delete: if isVerified() && resource != null && resource.data.uid == request.auth.uid;
+      allow delete: if isVerified() && resource != null && resource.data.uid == request.auth.uid
+        && (!existsAfter(callerProfilePath()) || getAfter(callerProfilePath()).data.handleLower != handleLower);
     }
 
     // Bidirectional friend requests and accepted friendships

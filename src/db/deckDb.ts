@@ -4,6 +4,7 @@ import { cardDb, type MtgCardDatabase, type SavedDeckRecord } from './cardDb.js'
 
 export interface ListSavedDecksOptions {
   includeDeleted?: boolean;
+  activeUid?: string | null;
 }
 
 export interface CardIdContainingRecord {
@@ -271,9 +272,17 @@ export async function listSavedDeckRecords(
   const db = isMtgDatabase(dbOrOptions) ? dbOrOptions : cardDb;
   const options = isMtgDatabase(dbOrOptions) ? maybeOptions : dbOrOptions;
   const includeDeleted = options?.includeDeleted ?? false;
+  const hasActiveUidFilter = options?.activeUid !== undefined;
+  const activeUid = options?.activeUid ?? null;
 
   const all = await db.decks.toArray();
-  const visible = includeDeleted ? all : all.filter((record) => !record.deletedAt);
+  const visible = all.filter((record) => {
+    if (!includeDeleted && record.deletedAt) return false;
+    if (hasActiveUidFilter && record.ownerUid && record.ownerUid !== activeUid) {
+      return false;
+    }
+    return true;
+  });
   return visible.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 

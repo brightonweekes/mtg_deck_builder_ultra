@@ -206,6 +206,12 @@ describe('Milestone 5 deployment readiness & Cloudflare Pages compliance', () =>
     expect(headers).toContain('must-revalidate');
     expect(headers).toContain('/data/cards.min.json');
     expect(headers).toContain('/assets/*');
+    expect(headers).toContain('Strict-Transport-Security: max-age=31536000; includeSubDomains; preload');
+    expect(headers).toContain('Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+    expect(headers).toContain('https://identitytoolkit.googleapis.com');
+    expect(headers).toContain('https://firestore.googleapis.com');
+    expect(headers).not.toContain('*.firebaseio.com');
+    expect(headers).not.toContain('*.googleapis.com');
     // Crucial: COEP require-corp would break Scryfall card artwork hotlinking
     expect(headers.toLowerCase()).not.toContain('require-corp');
 

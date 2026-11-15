@@ -31,6 +31,7 @@ import type {
   SyncStatus,
   UserProfile,
 } from '../types/cloud.js';
+import { clearPendingHandleFromStorage } from './firebaseProvider.js';
 import {
   HANDLE_MAX_LEN,
   MAX_DECK_CARD_COUNT,
@@ -45,6 +46,21 @@ import {
 } from './validation.js';
 
 const UNTOUCHED_STARTER_NAME = 'Untitled Commander Deck';
+const ACTIVE_DECK_STORAGE_KEY = 'mtg_ultra_active_deck_v1';
+
+function clearActiveDraftFromStorageForOwner(uid: string): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    const raw = window.localStorage.getItem(ACTIVE_DECK_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as { ownerUid?: unknown } | null;
+    if (parsed && typeof parsed === 'object' && parsed.ownerUid === uid) {
+      window.localStorage.removeItem(ACTIVE_DECK_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore malformed JSON or storage access errors in restricted browser modes.
+  }
+}
 
 export type ConflictResolution = 'keep-cloud' | 'keep-local' | 'keep-both';
 
@@ -488,15 +504,17 @@ export async function mergeGuestRecordsForUser(
 }
 
 /**
- * Builds a portable JSON backup bundle containing all non-deleted decks and cardlists.
+ * Builds a portable JSON backup bundle containing all non-deleted decks and cardlists
+ * owned by the signed-in user or local guest profile (never another user's cached records).
  */
 export async function buildAccountExportBundle(
   profile: UserProfile | null,
   db: MtgCardDatabase = cardDb,
 ): Promise<AccountExportBundle> {
+  const activeUid = profile?.uid ?? null;
   const [decks, cardlists] = await Promise.all([
-    listSavedDeckRecords(db, { includeDeleted: false }),
-    listCardLists(db, { includeDeleted: false }),
+    listSavedDeckRecords(db, { includeDeleted: false, activeUid }),
+    listCardLists(db, { includeDeleted: false, activeUid }),
   ]);
 
   return {
@@ -509,8 +527,9 @@ export async function buildAccountExportBundle(
 }
 
 /**
- * Clears per-user sync watermarks on sign-out and optionally removes cached cloud
- * decks and cardlists on shared computers while leaving guest/local records intact.
+ * Clears per-user sync watermarks and pending handle state on sign-out and optionally
+ * removes cached cloud decks, cardlists, and active draft copies on shared computers
+ * while leaving guest/local records intact.
  */
 export async function cleanupOnSignOut(
   uid: string,
@@ -520,9 +539,11 @@ export async function cleanupOnSignOut(
   if (!uid) return;
   await setSyncMeta(getDeckSyncMetaKey(uid), null, db);
   await setSyncMeta(getCardListSyncMetaKey(uid), null, db);
+  clearPendingHandleFromStorage(uid);
   if (removeCachedCloudCopies) {
     await clearCloudDecksForOwner(uid, db);
     await clearCloudCardListsForOwner(uid, db);
+    clearActiveDraftFromStorageForOwner(uid);
   }
 }
 

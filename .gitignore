@@ -3,3 +3,14 @@ node_modules/
 dist/
 .DS_Store
 *.log
+
+# Environment & secrets (keep .env.example tracked)
+.env
+.env.*
+!.env.example
+
+# Firebase CLI caches & service account credentials
+.firebase/
+.firebaserc
+*firebase-adminsdk*.json
+service-account*.json

@@ -832,8 +832,12 @@ export class FirebaseCloudProvider implements CloudProvider {
     if (!this.isConfigured()) return;
     const auth = this.deps.getAuth();
     if (!auth) return;
+    const uid = auth.currentUser?.uid;
     try {
       await this.deps.authOps.signOut(auth);
+      if (uid) {
+        clearPendingHandleFromStorage(uid, this.getStorage());
+      }
     } catch (err) {
       throw toCloudError(err);
     }
