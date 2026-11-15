@@ -6,6 +6,7 @@ import {
   type FunctionalRole,
   type SerializedCompactCard,
 } from '../types/card.js';
+import type { CardListRecord, DeckVisibility, SyncStatus } from '../types/cloud.js';
 import type { SyncStatusPayload } from '../types/search.js';
 
 export const SNAPSHOT_KEY = 'commander-oracle';
@@ -26,11 +27,22 @@ export interface MetaRecord {
 export interface SavedDeckRecord {
   id: string;
   name: string;
+  description?: string;
   commanderIds: string[];
   mainboard: Record<string, number>;
   sideboard: Record<string, number>;
+  lockSearchToCommanderIdentity?: boolean;
+  visibility?: DeckVisibility;
+  sharedWithUids?: string[];
+  synergyThemes?: string[];
+  ownerUid?: string | null;
+  ownerHandle?: string;
+  revision?: number;
+  syncStatus?: SyncStatus;
+  cloudUpdatedAt?: string;
   createdAt: string;
   updatedAt: string;
+  deletedAt?: string | null;
 }
 
 export interface CollectionEntryRecord {
@@ -41,11 +53,18 @@ export interface CollectionEntryRecord {
   updatedAt: string;
 }
 
+export interface SyncMetaRecord {
+  key: string;
+  value: string;
+}
+
 export class MtgCardDatabase extends Dexie {
   catalogSnapshots!: Table<CatalogSnapshotRecord, string>;
   meta!: Table<MetaRecord, string>;
   decks!: Table<SavedDeckRecord, string>;
   collection!: Table<CollectionEntryRecord, string>;
+  cardlists!: Table<CardListRecord, string>;
+  syncMeta!: Table<SyncMetaRecord, string>;
 
   constructor(name = 'mtg_deck_builder_ultra') {
     super(name);
@@ -55,6 +74,28 @@ export class MtgCardDatabase extends Dexie {
       decks: 'id, name, updatedAt',
       collection: 'cardId',
     });
+
+    this.version(2)
+      .stores({
+        catalogSnapshots: 'id',
+        meta: 'key',
+        decks: 'id, name, updatedAt, ownerUid, syncStatus, deletedAt',
+        collection: 'cardId',
+        cardlists: 'id, name, listType, updatedAt, ownerUid, syncStatus, deletedAt',
+        syncMeta: 'key',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table<SavedDeckRecord, string>('decks')
+          .toCollection()
+          .modify((deck) => {
+            if (deck.visibility === undefined) deck.visibility = 'private';
+            if (deck.syncStatus === undefined) deck.syncStatus = 'local';
+            if (deck.revision === undefined) deck.revision = 0;
+            if (deck.ownerUid === undefined) deck.ownerUid = null;
+            if (deck.deletedAt === undefined) deck.deletedAt = null;
+          });
+      });
   }
 }
 

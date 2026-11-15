@@ -1,4 +1,5 @@
 import type { CompactCard, ManaColor } from './card.js';
+import type { DeckVisibility, SyncStatus } from './cloud.js';
 
 export type ViewMode = 'standard' | 'compact' | 'detailed';
 export type WorkspaceTab = 'search' | 'deck';
@@ -17,6 +18,15 @@ export interface DeckDraft {
   mainboard: Record<string, DeckCardEntry>;
   sideboard: Record<string, DeckCardEntry>;
   lockSearchToCommanderIdentity: boolean;
+  visibility?: DeckVisibility;
+  sharedWithUids?: string[];
+  ownerUid?: string | null;
+  ownerHandle?: string;
+  revision?: number;
+  syncStatus?: SyncStatus;
+  cloudUpdatedAt?: string;
+  deletedAt?: string | null;
+  synergyThemes?: string[];
   createdAt: string;
   updatedAt: string;
 }
