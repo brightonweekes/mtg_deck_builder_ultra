@@ -32,7 +32,11 @@ import type {
   UserProfile,
 } from '../types/cloud.js';
 import {
+  HANDLE_MAX_LEN,
+  MAX_DECK_CARD_COUNT,
   MAX_DECK_NAME_LEN,
+  MAX_SHARED_WITH_UIDS,
+  MAX_SYNERGY_THEMES,
   humanizeCloudError,
   normalizeHandle,
   sanitizeCardListPayloadForCloud,
@@ -40,9 +44,6 @@ import {
   type HumanizedCloudError,
 } from './validation.js';
 
-const MAX_CLOUD_SYNERGY_THEMES = 20;
-const MAX_CLOUD_SHARED_UIDS = 50;
-const MAX_HANDLE_LEN = 24;
 const UNTOUCHED_STARTER_NAME = 'Untitled Commander Deck';
 
 export type ConflictResolution = 'keep-cloud' | 'keep-local' | 'keep-both';
@@ -157,7 +158,7 @@ function createEmptySyncResult(): SyncRunResult {
 
 function sanitizeOwnerHandle(handle: string, fallbackHandle?: string): string {
   const normalized = normalizeHandle(handle || fallbackHandle || '');
-  return normalized.slice(0, MAX_HANDLE_LEN);
+  return normalized.slice(0, HANDLE_MAX_LEN);
 }
 
 function buildCardIdLookup(cardMap: Record<string, CompactCard>): Record<string, CompactCard> {
@@ -304,11 +305,11 @@ export function savedDeckToCloudDeck(
     colorIdentity: getCombinedColorIdentity(commanderCards),
     mainboard: mainboardOracle,
     sideboard: sideboardOracle,
-    synergyThemes: rawThemes.slice(0, MAX_CLOUD_SYNERGY_THEMES),
+    synergyThemes: rawThemes.slice(0, MAX_SYNERGY_THEMES),
     cardCount: 0,
     lockSearchToCommanderIdentity: record.lockSearchToCommanderIdentity ?? true,
     visibility: record.visibility ?? 'private',
-    sharedWithUids: (record.sharedWithUids ?? []).slice(0, MAX_CLOUD_SHARED_UIDS),
+    sharedWithUids: (record.sharedWithUids ?? []).slice(0, MAX_SHARED_WITH_UIDS),
     revision: record.revision ?? 0,
     createdAt,
     updatedAt,
@@ -320,7 +321,10 @@ export function savedDeckToCloudDeck(
     (sum, qty) => sum + qty,
     0,
   );
-  sanitized.cardCount = (sanitized.commanderOracleIds?.length ?? 0) + sanitizedMainboardCount;
+  sanitized.cardCount = Math.min(
+    MAX_DECK_CARD_COUNT,
+    (sanitized.commanderOracleIds?.length ?? 0) + sanitizedMainboardCount,
+  );
   return sanitized;
 }
 
@@ -389,7 +393,7 @@ export function cardListToCloudCardList(
     listType: record.listType,
     entries: oracleEntries,
     visibility: record.visibility ?? 'private',
-    sharedWithUids: (record.sharedWithUids ?? []).slice(0, MAX_CLOUD_SHARED_UIDS),
+    sharedWithUids: (record.sharedWithUids ?? []).slice(0, MAX_SHARED_WITH_UIDS),
     revision: record.revision ?? 0,
     createdAt,
     updatedAt,
@@ -533,6 +537,7 @@ export class CloudSyncEngine {
   private readonly getSynergyThemes?: SyncCardLookupCallbacks['getSynergyThemes'];
   private readonly deckAdapter: SyncEntityAdapter<SavedDeckRecord, CloudDeckRecord>;
   private readonly cardListAdapter: SyncEntityAdapter<CardListRecord, CloudCardListRecord>;
+  private syncQueueTail: Promise<void> = Promise.resolve();
 
   constructor(options: CloudSyncEngineOptions) {
     this.provider = options.provider;
@@ -975,16 +980,20 @@ export class CloudSyncEngine {
     };
   }
 
-  /** Tags meaningful guest decks and cardlists with the signed-in user's ownership. */
-  async mergeGuestRecordsForUser(uid: string, handle: string): Promise<MergeGuestRecordsResult> {
-    return mergeGuestRecordsForUser(uid, handle, this.db);
+  /**
+   * Serializes mutating sync lifecycle operations on a single FIFO promise queue so concurrent
+   * `syncAll` / `pushPending` / `pullUpdates` / `resolveConflict` calls never race on Dexie revisions.
+   */
+  private runSerialized<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.syncQueueTail.then(task);
+    this.syncQueueTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
-  /**
-   * Pulls delta updates for decks and cardlists since the last clean per-user watermark,
-   * preserving tombstones and flagging divergent edits as `SyncConflict`s.
-   */
-  async pullUpdates(uid: string, handle = ''): Promise<SyncRunResult> {
+  private async runPullUpdates(uid: string, handle = ''): Promise<SyncRunResult> {
     if (!uid || !this.provider.isConfigured()) {
       return createEmptySyncResult();
     }
@@ -1000,10 +1009,7 @@ export class CloudSyncEngine {
     };
   }
 
-  /**
-   * Pushes all pending, local, and retryable-error decks and cardlists (never `'conflict'`).
-   */
-  async pushPending(uid: string, handle = ''): Promise<SyncRunResult> {
+  private async runPushPending(uid: string, handle = ''): Promise<SyncRunResult> {
     if (!uid || !this.provider.isConfigured()) {
       return createEmptySyncResult();
     }
@@ -1019,26 +1025,22 @@ export class CloudSyncEngine {
     };
   }
 
-  /**
-   * Runs a complete offline-first sync cycle:
-   * `mergeGuestRecordsForUser` -> `pushPending` -> `pullUpdates` -> `pushPending`.
-   */
-  async syncAll(uid: string, handle: string): Promise<SyncRunResult> {
+  private async runSyncAll(uid: string, handle: string): Promise<SyncRunResult> {
     if (!uid) {
       return createEmptySyncResult();
     }
 
-    await this.mergeGuestRecordsForUser(uid, handle);
+    await mergeGuestRecordsForUser(uid, handle, this.db);
     if (!this.provider.isConfigured()) {
       return createEmptySyncResult();
     }
 
-    const firstPush = await this.pushPending(uid, handle);
-    const pull = await this.pullUpdates(uid, handle);
+    const firstPush = await this.runPushPending(uid, handle);
+    const pull = await this.runPullUpdates(uid, handle);
 
     const isOffline =
       firstPush.errors.some((e) => e.isOffline) || pull.errors.some((e) => e.isOffline);
-    const secondPush = isOffline ? createEmptySyncResult() : await this.pushPending(uid, handle);
+    const secondPush = isOffline ? createEmptySyncResult() : await this.runPushPending(uid, handle);
 
     const conflictMap = new Map<string, SyncConflict>();
     for (const conflict of [...firstPush.conflicts, ...pull.conflicts, ...secondPush.conflicts]) {
@@ -1058,10 +1060,7 @@ export class CloudSyncEngine {
     };
   }
 
-  /**
-   * Resolves a sync conflict using `'keep-cloud'`, `'keep-local'`, or `'keep-both'`.
-   */
-  async resolveConflict(
+  private async runResolveConflict(
     conflict: SyncConflict,
     resolution: ConflictResolution,
     uid: string,
@@ -1073,6 +1072,46 @@ export class CloudSyncEngine {
     return this.resolveEntityConflict(this.cardListAdapter, conflict, resolution, uid, handle);
   }
 
+  /** Tags meaningful guest decks and cardlists with the signed-in user's ownership. */
+  async mergeGuestRecordsForUser(uid: string, handle: string): Promise<MergeGuestRecordsResult> {
+    return this.runSerialized(() => mergeGuestRecordsForUser(uid, handle, this.db));
+  }
+
+  /**
+   * Pulls delta updates for decks and cardlists since the last clean per-user watermark,
+   * preserving tombstones and flagging divergent edits as `SyncConflict`s.
+   */
+  async pullUpdates(uid: string, handle = ''): Promise<SyncRunResult> {
+    return this.runSerialized(() => this.runPullUpdates(uid, handle));
+  }
+
+  /**
+   * Pushes all pending, local, and retryable-error decks and cardlists (never `'conflict'`).
+   */
+  async pushPending(uid: string, handle = ''): Promise<SyncRunResult> {
+    return this.runSerialized(() => this.runPushPending(uid, handle));
+  }
+
+  /**
+   * Runs a complete offline-first sync cycle:
+   * `mergeGuestRecordsForUser` -> `pushPending` -> `pullUpdates` -> `pushPending`.
+   */
+  async syncAll(uid: string, handle: string): Promise<SyncRunResult> {
+    return this.runSerialized(() => this.runSyncAll(uid, handle));
+  }
+
+  /**
+   * Resolves a sync conflict using `'keep-cloud'`, `'keep-local'`, or `'keep-both'`.
+   */
+  async resolveConflict(
+    conflict: SyncConflict,
+    resolution: ConflictResolution,
+    uid: string,
+    handle = '',
+  ): Promise<SyncRunResult> {
+    return this.runSerialized(() => this.runResolveConflict(conflict, resolution, uid, handle));
+  }
+
   /** Exports all non-deleted local decks and cardlists into a portable JSON backup bundle. */
   async buildAccountExportBundle(profile: UserProfile | null): Promise<AccountExportBundle> {
     return buildAccountExportBundle(profile, this.db);
@@ -1080,6 +1119,6 @@ export class CloudSyncEngine {
 
   /** Clears per-user sync metadata and optionally deletes cached cloud copies on sign-out. */
   async cleanupOnSignOut(uid: string, removeCachedCloudCopies: boolean): Promise<void> {
-    return cleanupOnSignOut(uid, removeCachedCloudCopies, this.db);
+    return this.runSerialized(() => cleanupOnSignOut(uid, removeCachedCloudCopies, this.db));
   }
 }

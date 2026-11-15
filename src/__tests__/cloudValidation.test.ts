@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   buildFriendInviteUrl,
@@ -7,19 +9,30 @@ import {
   HANDLE_MIN_LEN,
   humanizeCloudError,
   makeFriendPairId,
+  MAX_AVATAR_COMMANDER_ID_LEN,
   MAX_CARDLIST_KEYS,
   MAX_CARDLIST_NOTE_LEN,
   MAX_CLOUD_PAYLOAD_BYTES,
+  MAX_COLOR_IDENTITY,
+  MAX_COMMANDER_IDS,
+  MAX_DECK_CARD_COUNT,
   MAX_DECK_DESC_LEN,
+  MAX_DECK_ID_LEN,
   MAX_DECK_NAME_LEN,
+  MAX_DISPLAY_NAME_LEN,
   MAX_MAINBOARD_KEYS,
+  MAX_SHARED_WITH_UIDS,
   MAX_SIDEBOARD_KEYS,
+  MAX_SYNERGY_THEMES,
   normalizeHandle,
   parseCloudUrlIntents,
+  RESERVED_HANDLES,
   sanitizeCardListEntries,
   sanitizeCardListPayloadForCloud,
   sanitizeDeckPayloadForCloud,
   suggestHandleFromEmail,
+  VALID_CARD_LIST_TYPES,
+  VALID_DECK_VISIBILITIES,
   validateEmail,
   validateHandle,
   validatePassword,
@@ -606,5 +619,149 @@ describe('cloud validation — humanizeCloudError', () => {
       isOffline: false,
       requiresRecentLogin: false,
     });
+  });
+});
+
+describe('cloud validation — firestore.rules parity & null-resource safety', () => {
+  const rulesText = readFileSync(path.join(process.cwd(), 'firestore.rules'), 'utf8');
+
+  function extractRulesSection(startMarker: string, endMarker: string): string {
+    const startIdx = rulesText.indexOf(startMarker);
+    expect(startIdx).toBeGreaterThanOrEqual(0);
+    const endIdx = rulesText.indexOf(endMarker, startIdx + startMarker.length);
+    expect(endIdx).toBeGreaterThan(startIdx);
+    return rulesText.slice(startIdx, endIdx);
+  }
+
+  it('caps synergyThemes at 20, sharedWithUids at 50, colorIdentity at 5, and cardCount at 500', () => {
+    expect(MAX_SYNERGY_THEMES).toBe(20);
+    expect(MAX_SHARED_WITH_UIDS).toBe(50);
+    expect(MAX_COLOR_IDENTITY).toBe(5);
+    expect(MAX_DECK_CARD_COUNT).toBe(500);
+
+    const sanitized = sanitizeDeckPayloadForCloud({
+      name: 'Parity Test Deck',
+      ownerHandle: 'a'.repeat(HANDLE_MAX_LEN + 10),
+      commanderOracleIds: ['c1', 'c2'],
+      colorIdentity: ['W', 'U', 'B', 'R', 'G', 'W'],
+      mainboard: { 'ora-1': 1 },
+      synergyThemes: Array.from({ length: 25 }, (_, i) => `Theme-${i}`),
+      sharedWithUids: Array.from({ length: 65 }, (_, i) => `uid-${i}`),
+      cardCount: 750,
+    });
+
+    expect(sanitized.ownerHandle).toBe('a'.repeat(HANDLE_MAX_LEN));
+    expect(sanitized.colorIdentity).toEqual(['W', 'U', 'B', 'R', 'G']);
+    expect(sanitized.synergyThemes).toHaveLength(MAX_SYNERGY_THEMES);
+    expect(sanitized.sharedWithUids).toHaveLength(MAX_SHARED_WITH_UIDS);
+    expect(sanitized.cardCount).toBe(MAX_DECK_CARD_COUNT);
+
+    const sanitizedList = sanitizeCardListPayloadForCloud({
+      name: 'Parity Test List',
+      listType: 'wishlist',
+      entries: { 'ora-1': { quantity: 1 } },
+      sharedWithUids: Array.from({ length: 60 }, (_, i) => `uid-${i}`),
+    });
+    expect(sanitizedList.sharedWithUids).toHaveLength(MAX_SHARED_WITH_UIDS);
+  });
+
+  it('rejects every reserved handle and matches firestore.rules isReservedHandle exactly', () => {
+    const reservedBlock = extractRulesSection('function isReservedHandle(handleLower)', '}');
+    const match = reservedBlock.match(/\[([\s\S]*?)\]/);
+    expect(match).not.toBeNull();
+    const rulesReservedHandles = Array.from(match![1]!.matchAll(/'([^']+)'/g), (m) => m[1]!);
+
+    expect(new Set(rulesReservedHandles)).toEqual(RESERVED_HANDLES);
+    expect(rulesReservedHandles).toHaveLength(RESERVED_HANDLES.size);
+
+    for (const reserved of RESERVED_HANDLES) {
+      const result = validateHandle(reserved);
+      expect(result.valid).toBe(false);
+      expect(result.error).toMatch(/reserved/i);
+    }
+  });
+
+  it('keeps all schema caps and enums in 100% parity with firestore.rules', () => {
+    // Handle bounds & profile limits
+    expect(rulesText).toContain(`^[a-zA-Z0-9_-]{${HANDLE_MIN_LEN},${HANDLE_MAX_LEN}}$`);
+    expect(rulesText).toContain(`^[a-z0-9_-]{${HANDLE_MIN_LEN},${HANDLE_MAX_LEN}}$`);
+
+    const profileFn = extractRulesSection(
+      'function isValidProfile(uid, data)',
+      'function isValidFriendshipCreate',
+    );
+    expect(profileFn).toContain(`data.displayName.size() <= ${MAX_DISPLAY_NAME_LEN}`);
+    expect(profileFn).toContain(`data.avatarCommanderId.size() <= ${MAX_AVATAR_COMMANDER_ID_LEN}`);
+
+    // Visibility & card list type enums
+    const visibilityFn = extractRulesSection(
+      'function isValidVisibility(visibility)',
+      'function isValidProfile',
+    );
+    const rulesVisibilities = Array.from(visibilityFn.matchAll(/'([^']+)'/g), (m) => m[1]!);
+    expect(rulesVisibilities).toEqual([...VALID_DECK_VISIBILITIES]);
+
+    // Deck field caps
+    const deckFn = extractRulesSection(
+      'function isValidDeckDoc(deckId, data)',
+      'function isValidCardListDoc',
+    );
+    expect(deckFn).toContain(`data.id.size() <= ${MAX_DECK_ID_LEN}`);
+    expect(deckFn).toContain(`data.ownerHandle.size() <= ${HANDLE_MAX_LEN}`);
+    expect(deckFn).toContain(`data.name.size() <= ${MAX_DECK_NAME_LEN}`);
+    expect(deckFn).toContain(`data.description.size() <= ${MAX_DECK_DESC_LEN}`);
+    expect(deckFn).toContain(`data.commanderOracleIds.size() <= ${MAX_COMMANDER_IDS}`);
+    expect(deckFn).toContain(`data.colorIdentity.size() <= ${MAX_COLOR_IDENTITY}`);
+    expect(deckFn).toContain(`data.mainboard.keys().size() <= ${MAX_MAINBOARD_KEYS}`);
+    expect(deckFn).toContain(`data.sideboard.keys().size() <= ${MAX_SIDEBOARD_KEYS}`);
+    expect(deckFn).toContain(`data.synergyThemes.size() <= ${MAX_SYNERGY_THEMES}`);
+    expect(deckFn).toContain(`data.cardCount <= ${MAX_DECK_CARD_COUNT}`);
+    expect(deckFn).toContain(`data.sharedWithUids.size() <= ${MAX_SHARED_WITH_UIDS}`);
+
+    // CardList field caps
+    const listFn = extractRulesSection(
+      'function isValidCardListDoc(listId, data)',
+      '// Collection Rules',
+    );
+    expect(listFn).toContain(`data.id.size() <= ${MAX_DECK_ID_LEN}`);
+    expect(listFn).toContain(`data.ownerHandle.size() <= ${HANDLE_MAX_LEN}`);
+    expect(listFn).toContain(`data.name.size() <= ${MAX_DECK_NAME_LEN}`);
+    expect(listFn).toContain(`data.description.size() <= ${MAX_DECK_DESC_LEN}`);
+    expect(listFn).toContain(`data.entries.keys().size() <= ${MAX_CARDLIST_KEYS}`);
+    expect(listFn).toContain(`data.sharedWithUids.size() <= ${MAX_SHARED_WITH_UIDS}`);
+    const listTypeMatch = listFn.match(/data\.listType in \[([\s\S]*?)\]/);
+    expect(listTypeMatch).not.toBeNull();
+    const rulesListTypes = Array.from(listTypeMatch![1]!.matchAll(/'([^']+)'/g), (m) => m[1]!);
+    expect(rulesListTypes).toEqual([...VALID_CARD_LIST_TYPES]);
+  });
+
+  it('guards allow get and delete/update rules against null-resource crashes while keeping list non-enumerable', () => {
+    const handlesBlock = extractRulesSection('match /handles/{handleLower}', 'match /friendships');
+    expect(handlesBlock).toMatch(/allow get:\s*if isSignedIn\(\);/);
+    expect(handlesBlock).toMatch(/allow list:\s*if false;/);
+    expect(handlesBlock).toMatch(/allow update:\s*if false;/);
+    expect(handlesBlock).toMatch(/allow delete:\s*if isVerified\(\) && resource != null &&/);
+
+    const friendshipsBlock = extractRulesSection(
+      'match /friendships/{pairDocId}',
+      'match /friendCatalogs',
+    );
+    expect(friendshipsBlock).toMatch(/allow get:\s*if isVerified\(\) && resource != null &&/);
+    expect(friendshipsBlock).toMatch(/allow update:\s*if isVerified\(\)\s*&& resource != null/);
+    expect(friendshipsBlock).toMatch(/allow delete:\s*if isVerified\(\) && resource != null &&/);
+
+    const decksBlock = extractRulesSection('match /decks/{deckId}', 'match /cardlists');
+    expect(decksBlock).toMatch(/allow get:\s*if resource == null\s*\|\|/);
+    expect(decksBlock).toMatch(/allow list:\s*if \(isVerified\(\)/);
+    expect(decksBlock).not.toMatch(/allow list:[\s\S]*resource == null/);
+    expect(decksBlock).toMatch(/allow update:\s*if isVerified\(\)\s*&& resource != null/);
+    expect(decksBlock).toMatch(/allow delete:\s*if isVerified\(\)\s*&& resource != null/);
+
+    const listsBlock = extractRulesSection('match /cardlists/{listId}', 'match /{document=**}');
+    expect(listsBlock).toMatch(/allow get:\s*if resource == null\s*\|\|/);
+    expect(listsBlock).toMatch(/allow list:\s*if \(isVerified\(\)/);
+    expect(listsBlock).not.toMatch(/allow list:[\s\S]*resource == null/);
+    expect(listsBlock).toMatch(/allow update:\s*if isVerified\(\)\s*&& resource != null/);
+    expect(listsBlock).toMatch(/allow delete:\s*if isVerified\(\)\s*&& resource != null/);
   });
 });

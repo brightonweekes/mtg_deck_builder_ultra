@@ -1268,4 +1268,242 @@ describe('CloudSyncEngine & Offline-First Cross-Device Sync', () => {
     expect(await getSavedDeckRecord('bob-deck', db)).toBeDefined();
     expect(await getCardList('guest-list', db)).toBeDefined();
   });
+
+  it('serializes overlapping syncAll, pushPending, and pullUpdates calls without duplicate pushes or self-conflicts', async () => {
+    const db = createTestDb('mutex-sync');
+    const provider = new InMemoryCloudProvider();
+    const engine = createEngine(provider, db, [marwynV1, solRingV1]);
+
+    await db.decks.put({
+      id: 'concurrent-deck',
+      name: 'Concurrent Brew',
+      commanderIds: [marwynV1.id],
+      mainboard: { [solRingV1.id]: 1 },
+      sideboard: {},
+      ownerUid: 'uid-alice',
+      syncStatus: 'pending',
+      revision: 0,
+      deletedAt: null,
+      createdAt: '2026-11-14T09:00:00.000Z',
+      updatedAt: '2026-11-14T09:00:00.000Z',
+    });
+
+    await createCardList(
+      {
+        id: 'concurrent-list',
+        name: 'Concurrent Binder',
+        listType: 'collection',
+        ownerUid: 'uid-alice',
+        entries: { [solRingV1.id]: { quantity: 2 } },
+      },
+      db,
+    );
+
+    let activePushCount = 0;
+    let maxConcurrentPushes = 0;
+    let releaseFirstPush!: () => void;
+    const firstPushStarted = new Promise<void>((resolve) => {
+      const origPushDeck = provider.pushDeck.bind(provider);
+      provider.pushDeck = async (deck, expectedRevision) => {
+        activePushCount += 1;
+        maxConcurrentPushes = Math.max(maxConcurrentPushes, activePushCount);
+        if (provider.pushDeckCalls.length === 0) {
+          resolve();
+          await new Promise<void>((gateResolve) => {
+            releaseFirstPush = gateResolve;
+          });
+        }
+        try {
+          return await origPushDeck(deck, expectedRevision);
+        } finally {
+          activePushCount -= 1;
+        }
+      };
+    });
+
+    // Launch overlapping syncAll -> pushPending -> pullUpdates -> syncAll while first push is in-flight
+    const sync1Promise = engine.syncAll('uid-alice', 'alice');
+    await firstPushStarted;
+    const pushPromise = engine.pushPending('uid-alice', 'alice');
+    const pullPromise = engine.pullUpdates('uid-alice', 'alice');
+    const sync2Promise = engine.syncAll('uid-alice', 'alice');
+
+    // Allow microtasks to settle so any non-serialized race would have entered pushDeck by now
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(activePushCount).toBe(1);
+
+    releaseFirstPush();
+    const [sync1, push2, pullRes, sync2] = await Promise.all([
+      sync1Promise,
+      pushPromise,
+      pullPromise,
+      sync2Promise,
+    ]);
+
+    expect(maxConcurrentPushes).toBe(1);
+    expect(provider.pushDeckCalls).toEqual([{ id: 'concurrent-deck', expectedRevision: 0 }]);
+    expect(provider.pushCardListCalls).toEqual([{ id: 'concurrent-list', expectedRevision: 0 }]);
+
+    expect(sync1.pushedCount).toBe(2);
+    expect(push2.pushedCount).toBe(0);
+    expect(sync2.pushedCount).toBe(0);
+    expect(pullRes.conflicts).toEqual([]);
+    expect([...sync1.conflicts, ...push2.conflicts, ...sync2.conflicts]).toEqual([]);
+    expect([...sync1.errors, ...push2.errors, ...pullRes.errors, ...sync2.errors]).toEqual([]);
+
+    const savedDeck = await getSavedDeckRecord('concurrent-deck', db);
+    expect(savedDeck?.syncStatus).toBe('synced');
+    expect(savedDeck?.revision).toBe(1);
+    const savedList = await getCardList('concurrent-list', db);
+    expect(savedList?.syncStatus).toBe('synced');
+    expect(savedList?.revision).toBe(1);
+  });
+
+  it('serializes resolveConflict against concurrent pushPending/syncAll and recovers cleanly after a thrown error', async () => {
+    const db = createTestDb('mutex-resolve-recovery');
+    const provider = new InMemoryCloudProvider();
+
+    let failNextResolveCards = false;
+    const search = new CardSearchEngine([marwynV1, solRingV1]);
+    const engine = new CloudSyncEngine({
+      provider,
+      db,
+      resolveCardsByIds: async (ids) => {
+        if (failNextResolveCards) {
+          failNextResolveCards = false;
+          throw new Error('Catalog worker crashed');
+        }
+        return search.getCardsByIdMap(ids);
+      },
+    });
+
+    // Seed cloud revision 2 for a deck that has diverged locally at revision 1
+    provider.decks.set('conflict-deck', {
+      id: 'conflict-deck',
+      ownerUid: 'uid-alice',
+      ownerHandle: 'alice',
+      name: 'Cloud Revision 2',
+      commanderOracleIds: ['ora-marwyn'],
+      colorIdentity: ['G'],
+      mainboard: { 'ora-sol': 1 },
+      sideboard: {},
+      synergyThemes: [],
+      cardCount: 2,
+      lockSearchToCommanderIdentity: true,
+      visibility: 'private',
+      sharedWithUids: [],
+      revision: 2,
+      createdAt: '2026-11-14T09:00:00.000Z',
+      updatedAt: '2026-11-14T10:30:00.000Z',
+      deletedAt: null,
+    });
+
+    await db.decks.put({
+      id: 'conflict-deck',
+      name: 'Local Conflict Winner',
+      commanderIds: [marwynV1.id],
+      mainboard: { [solRingV1.id]: 1 },
+      sideboard: {},
+      ownerUid: 'uid-alice',
+      ownerHandle: 'alice',
+      syncStatus: 'pending',
+      revision: 1,
+      cloudUpdatedAt: '2026-11-14T09:30:00.000Z',
+      deletedAt: null,
+      createdAt: '2026-11-14T09:00:00.000Z',
+      updatedAt: '2026-11-14T10:35:00.000Z',
+    });
+
+    const pullRes = await engine.pullUpdates('uid-alice', 'alice');
+    expect(pullRes.conflicts).toHaveLength(1);
+    const conflict = pullRes.conflicts[0]!;
+
+    // 1. Overlapping resolveConflict('keep-local') + pushPending + syncAll must only push once
+    let activeResolvePushes = 0;
+    let maxResolveConcurrentPushes = 0;
+    let releaseResolvePush!: () => void;
+    const origPushDeck = provider.pushDeck.bind(provider);
+    const resolvePushStarted = new Promise<void>((resolve) => {
+      provider.pushDeck = async (deck, expectedRevision) => {
+        activeResolvePushes += 1;
+        maxResolveConcurrentPushes = Math.max(maxResolveConcurrentPushes, activeResolvePushes);
+        resolve();
+        await new Promise<void>((gateResolve) => {
+          releaseResolvePush = gateResolve;
+        });
+        try {
+          return await origPushDeck(deck, expectedRevision);
+        } finally {
+          activeResolvePushes -= 1;
+        }
+      };
+    });
+
+    const resolvePromise = engine.resolveConflict(conflict, 'keep-local', 'uid-alice', 'alice');
+    await resolvePushStarted;
+    // At this point Dexie already holds preparedLocal with syncStatus='pending' & revision=2!
+    const concurrentPushPromise = engine.pushPending('uid-alice', 'alice');
+    const concurrentSyncPromise = engine.syncAll('uid-alice', 'alice');
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(activeResolvePushes).toBe(1);
+    expect(provider.pushDeckCalls).toHaveLength(0);
+
+    releaseResolvePush();
+    const [resolveRes, concurrentPushRes, concurrentSyncRes] = await Promise.all([
+      resolvePromise,
+      concurrentPushPromise,
+      concurrentSyncPromise,
+    ]);
+
+    expect(maxResolveConcurrentPushes).toBe(1);
+    expect(provider.pushDeckCalls).toEqual([{ id: 'conflict-deck', expectedRevision: 2 }]);
+    expect(resolveRes.pushedCount).toBe(1);
+    expect(resolveRes.conflicts).toEqual([]);
+    expect(concurrentPushRes.pushedCount).toBe(0);
+    expect(concurrentPushRes.conflicts).toEqual([]);
+    expect(concurrentSyncRes.pushedCount).toBe(0);
+    expect(concurrentSyncRes.conflicts).toEqual([]);
+    expect((await getSavedDeckRecord('conflict-deck', db))?.revision).toBe(3);
+
+    // 2. Mutex recovery after a throwing operation: failure rejects caller without wedging queued calls
+    provider.pushDeck = origPushDeck;
+    await db.decks.put({
+      id: 'recovery-deck',
+      name: 'Queued After Failure',
+      commanderIds: [marwynV1.id],
+      mainboard: { [solRingV1.id]: 1 },
+      sideboard: {},
+      ownerUid: 'uid-alice',
+      syncStatus: 'pending',
+      revision: 0,
+      deletedAt: null,
+      createdAt: '2026-11-14T11:00:00.000Z',
+      updatedAt: '2026-11-14T11:00:00.000Z',
+    });
+
+    // Force resolveConflict('keep-cloud') to throw out of the mutex via resolveCardsByIds
+    // while another pushPending is already queued behind it on the mutex.
+    failNextResolveCards = true;
+    const failingResolve = engine.resolveConflict(conflict, 'keep-cloud', 'uid-alice', 'alice');
+    const queuedPush = engine.pushPending('uid-alice', 'alice');
+
+    const [resolveOutcome, queuedPushOutcome] = await Promise.allSettled([
+      failingResolve,
+      queuedPush,
+    ]);
+    expect(resolveOutcome.status).toBe('rejected');
+    if (resolveOutcome.status === 'rejected') {
+      expect(String(resolveOutcome.reason)).toContain('Catalog worker crashed');
+    }
+    expect(queuedPushOutcome.status).toBe('fulfilled');
+    if (queuedPushOutcome.status === 'fulfilled') {
+      expect(queuedPushOutcome.value.pushedCount).toBe(1);
+      expect(queuedPushOutcome.value.errors).toEqual([]);
+    }
+    expect((await getSavedDeckRecord('recovery-deck', db))?.syncStatus).toBe('synced');
+    expect((await getSavedDeckRecord('recovery-deck', db))?.revision).toBe(1);
+  });
 });

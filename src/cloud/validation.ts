@@ -52,10 +52,18 @@ export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   'handles',
 ]);
 
+export const MAX_DISPLAY_NAME_LEN = 60;
+export const MAX_AVATAR_COMMANDER_ID_LEN = 80;
+export const MAX_DECK_ID_LEN = 128;
 export const MAX_DECK_NAME_LEN = 120;
 export const MAX_DECK_DESC_LEN = 2000;
 export const MAX_MAINBOARD_KEYS = 250;
 export const MAX_SIDEBOARD_KEYS = 200;
+export const MAX_SYNERGY_THEMES = 20;
+export const MAX_SYNERGY_THEME_LEN = 60;
+export const MAX_SHARED_WITH_UIDS = 50;
+export const MAX_COLOR_IDENTITY = 5;
+export const MAX_DECK_CARD_COUNT = 500;
 export const MAX_CARDLIST_KEYS = 1000;
 export const MAX_CARDLIST_NOTE_LEN = 120;
 export const MAX_DECK_CARD_QTY = 99;
@@ -78,6 +86,7 @@ export const VALID_CARD_LIST_TYPES: readonly CardListType[] = [
 
 const VALID_VISIBILITY_SET: ReadonlySet<string> = new Set(VALID_DECK_VISIBILITIES);
 const VALID_CARD_LIST_TYPE_SET: ReadonlySet<string> = new Set(VALID_CARD_LIST_TYPES);
+const VALID_MANA_COLOR_SET: ReadonlySet<string> = new Set<ManaColor>(['W', 'U', 'B', 'R', 'G']);
 
 const RE_EMAIL_LIKE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const RE_EMAIL_STRICT = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -634,6 +643,7 @@ function sanitizeStringList(
 
 function buildBaseCloudMetadata(
   payload: {
+    ownerHandle?: string;
     name: string;
     description?: string;
     visibility?: DeckVisibility | string;
@@ -646,6 +656,10 @@ function buildBaseCloudMetadata(
   const rawName = typeof payload.name === 'string' ? payload.name.trim() : '';
   sanitized.name = safeSlice(rawName, MAX_DECK_NAME_LEN) || fallbackName;
 
+  if (typeof payload.ownerHandle === 'string') {
+    sanitized.ownerHandle = safeSlice(payload.ownerHandle.trim(), HANDLE_MAX_LEN);
+  }
+
   if (typeof payload.description === 'string') {
     sanitized.description = safeSlice(payload.description.trim(), MAX_DECK_DESC_LEN);
   } else {
@@ -655,7 +669,8 @@ function buildBaseCloudMetadata(
   sanitized.visibility = validateVisibility(payload.visibility);
 
   if (payload.sharedWithUids !== undefined) {
-    sanitized.sharedWithUids = sanitizeStringList(payload.sharedWithUids) ?? [];
+    sanitized.sharedWithUids =
+      sanitizeStringList(payload.sharedWithUids, MAX_SHARED_WITH_UIDS) ?? [];
   }
 
   if (typeof payload.revision === 'number') {
@@ -696,8 +711,32 @@ export function sanitizeDeckPayloadForCloud<T extends SanitizableDeckPayload>(
     sanitized.commanderOracleIds = commanders;
   }
 
+  if (payload.colorIdentity !== undefined) {
+    const colors: ManaColor[] = [];
+    if (Array.isArray(payload.colorIdentity)) {
+      for (const color of payload.colorIdentity) {
+        if (
+          typeof color === 'string' &&
+          VALID_MANA_COLOR_SET.has(color) &&
+          !colors.includes(color as ManaColor)
+        ) {
+          colors.push(color as ManaColor);
+          if (colors.length >= MAX_COLOR_IDENTITY) break;
+        }
+      }
+    }
+    sanitized.colorIdentity = colors;
+  }
+
   if (payload.synergyThemes !== undefined) {
-    sanitized.synergyThemes = sanitizeStringList(payload.synergyThemes, 30, 60) ?? [];
+    sanitized.synergyThemes =
+      sanitizeStringList(payload.synergyThemes, MAX_SYNERGY_THEMES, MAX_SYNERGY_THEME_LEN) ?? [];
+  }
+
+  if (typeof payload.cardCount === 'number') {
+    sanitized.cardCount = Number.isFinite(payload.cardCount)
+      ? Math.min(MAX_DECK_CARD_COUNT, Math.max(0, Math.floor(payload.cardCount)))
+      : 0;
   }
 
   assertWithinCloudByteLimit(sanitized, 'Deck cloud');
