@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronUp,
   Crown,
+  FileText,
   FolderOpen,
   Lock,
   Minus,
@@ -22,6 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { MAX_DECK_DESC_LEN } from '../cloud/validation.js';
 import { ROLE_BY_ID } from '../config/searchConfig.js';
 import {
   isPrimaryLandCard,
@@ -31,8 +33,27 @@ import {
 } from '../deck/deckAnalytics.js';
 import { canAddCardToDeck, canHaveSecondCommander } from '../search/commanderRules.js';
 import type { CompactCard, FunctionalRole, ManaColor } from '../types/card.js';
+import type { DeckVisibility } from '../types/cloud.js';
 import type { DeckCardEntry, DeckDraft, DeckGroupMode } from '../types/deck.js';
 import { ColorIdentityBadges, ManaCostDisplay } from './ManaSymbol.js';
+
+const VISIBILITY_OPTIONS: ReadonlyArray<{
+  value: DeckVisibility;
+  label: string;
+  hint: string;
+}> = [
+  { value: 'private', label: 'Private', hint: 'Only visible in your own account' },
+  { value: 'friends', label: 'Friends', hint: 'Visible to accepted friends' },
+  { value: 'link', label: 'Unlisted Link', hint: 'Anyone with the ?deck= link can view & clone' },
+  { value: 'public', label: 'Public', hint: 'Publicly viewable via share link' },
+];
+
+const VISIBILITY_HINT_BY_VALUE: Readonly<Record<DeckVisibility, string>> = {
+  private: 'Private — only visible in your own account',
+  friends: 'Friends — visible to accepted friends',
+  link: 'Unlisted Link — anyone with the ?deck= link can view & clone',
+  public: 'Public — publicly viewable via share link',
+};
 
 interface DeckWorkspaceProps {
   deck: DeckDraft;
@@ -41,6 +62,8 @@ interface DeckWorkspaceProps {
   combinedColorIdentity: ManaColor[];
   basicLands: Record<string, CompactCard>;
   onRenameDeck: (name: string) => void;
+  onChangeVisibility?: (visibility: DeckVisibility) => void;
+  onChangeDescription?: (description: string) => void;
   onRemoveCommander: (cardId: string) => void;
   onToggleIdentityLock: (locked: boolean) => void;
   onMatchSynergy: () => void;
@@ -174,6 +197,8 @@ export function DeckWorkspace({
   combinedColorIdentity,
   basicLands,
   onRenameDeck,
+  onChangeVisibility,
+  onChangeDescription,
   onRemoveCommander,
   onToggleIdentityLock,
   onMatchSynergy,
@@ -196,6 +221,9 @@ export function DeckWorkspace({
 }: DeckWorkspaceProps) {
   const [groupMode, setGroupMode] = useState<DeckGroupMode>('role');
   const [showConsidering, setShowConsidering] = useState(true);
+  const [showPrimerNotes, setShowPrimerNotes] = useState(() =>
+    Boolean(deck.description && deck.description.trim().length > 0),
+  );
 
   const illegalSet = useMemo(
     () => new Set(analytics.illegalColorCardIds),
@@ -270,6 +298,9 @@ export function DeckWorkspace({
   });
 
   const canPair = deck.commanders.length === 1 && canHaveSecondCommander(deck.commanders[0]!);
+  const currentVisibility: DeckVisibility = deck.visibility ?? 'private';
+  const visibilityHint = VISIBILITY_HINT_BY_VALUE[currentVisibility];
+  const currentDescription = deck.description ?? '';
 
   return (
     <div className="mx-auto max-w-[1600px] space-y-4 px-4 py-4">
@@ -304,6 +335,33 @@ export function DeckWorkspace({
           <span className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-1.5 text-xs text-slate-300">
             Avg MV <strong className="font-mono text-slate-100">{analytics.averageCmc.toFixed(2)}</strong>
           </span>
+
+          {onChangeVisibility && (
+            <label
+              title={visibilityHint}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-2.5 py-1 text-xs text-slate-300"
+            >
+              <span className="text-[11px] font-semibold text-slate-400">Visibility:</span>
+              <select
+                aria-label="Deck visibility"
+                title={visibilityHint}
+                value={currentVisibility}
+                onChange={(e) => onChangeVisibility(e.target.value as DeckVisibility)}
+                className="bg-transparent font-semibold text-slate-100 outline-none"
+              >
+                {VISIBILITY_OPTIONS.map((opt) => (
+                  <option
+                    key={opt.value}
+                    value={opt.value}
+                    title={opt.hint}
+                    className="bg-slate-900 text-slate-100"
+                  >
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -344,6 +402,74 @@ export function DeckWorkspace({
           </button>
         </div>
       </section>
+
+      {/* Collapsible Deck Primer & Synergy Notes */}
+      {onChangeDescription && (
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/60">
+          <button
+            type="button"
+            onClick={() => setShowPrimerNotes((prev) => !prev)}
+            className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-xs transition hover:bg-slate-900/80"
+          >
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <FileText className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+              <span className="font-semibold text-slate-200">
+                Deck Primer &amp; Synergy Notes
+              </span>
+              {!showPrimerNotes && currentDescription.trim() && (
+                <span className="truncate text-slate-400">
+                  — {currentDescription.trim().slice(0, 90)}
+                  {currentDescription.trim().length > 90 ? '…' : ''}
+                </span>
+              )}
+              {deck.synergyThemes && deck.synergyThemes.length > 0 && (
+                <span className="hidden flex-wrap items-center gap-1 md:inline-flex">
+                  {deck.synergyThemes.slice(0, 4).map((theme) => (
+                    <span
+                      key={theme}
+                      className="rounded-md bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium text-amber-200/90"
+                    >
+                      {theme}
+                    </span>
+                  ))}
+                </span>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-2 text-slate-400">
+              <span className="font-mono text-[11px]">
+                {currentDescription.length}/{MAX_DECK_DESC_LEN}
+              </span>
+              {showPrimerNotes ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
+            </div>
+          </button>
+
+          {showPrimerNotes && (
+            <div className="border-t border-slate-800/80 px-4 py-3">
+              <textarea
+                aria-label="Deck Primer & Synergy Notes"
+                rows={3}
+                maxLength={MAX_DECK_DESC_LEN}
+                value={currentDescription}
+                onChange={(e) => onChangeDescription(e.target.value)}
+                placeholder="Write your deck gameplan, key combos, mulligan priorities, or upgrade targets (synced across devices)..."
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 placeholder-slate-500 outline-none focus:border-amber-400"
+              />
+              <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
+                <span>
+                  Synced visibility: <strong className="text-slate-200">{visibilityHint}</strong>
+                </span>
+                <span className="font-mono">
+                  {currentDescription.length} / {MAX_DECK_DESC_LEN} characters
+                </span>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Legality Issues Banner */}
       {analytics.issues.length > 0 && (

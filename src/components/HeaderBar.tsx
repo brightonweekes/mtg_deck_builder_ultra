@@ -1,9 +1,12 @@
 import {
+  AlertTriangle,
+  Cloud,
   Crown,
   Database,
   FolderOpen,
   Layers,
   LayoutDashboard,
+  LogIn,
   RefreshCw,
   Search,
   SlidersHorizontal,
@@ -15,6 +18,7 @@ import {
 import { useEffect, useRef } from 'react';
 import { canHaveSecondCommander, getCombinedColorIdentity } from '../search/commanderRules.js';
 import type { CompactCard } from '../types/card.js';
+import type { CloudUser, SyncStatus, UserProfile } from '../types/cloud.js';
 import type { WorkspaceTab } from '../types/deck.js';
 import type { SearchResponsePayload, SyncStatusPayload } from '../types/search.js';
 import { ColorIdentityBadges } from './ManaSymbol.js';
@@ -28,9 +32,17 @@ interface HeaderBarProps {
   totalDeckCards: number;
   syncStatus: SyncStatusPayload;
   searchResult: SearchResponsePayload | null;
+  cloudUser?: CloudUser | null;
+  cloudProfile?: UserProfile | null;
+  cloudSyncStatus?: SyncStatus;
+  isCloudSyncing?: boolean;
+  conflictCount?: number;
+  incomingFriendRequestsCount?: number;
   onOpenMobileFilters: () => void;
   onOpenDeckDrawer: () => void;
   onOpenDeckManager: () => void;
+  onOpenFriends?: () => void;
+  onOpenCloudAuthOrAccount?: () => void;
   onMatchCommanderSynergy: () => void;
   onFindPartner: () => void;
   onClearCommanders: () => void;
@@ -46,9 +58,17 @@ export function HeaderBar({
   totalDeckCards,
   syncStatus,
   searchResult,
+  cloudUser = null,
+  cloudProfile = null,
+  cloudSyncStatus = 'local',
+  isCloudSyncing = false,
+  conflictCount = 0,
+  incomingFriendRequestsCount = 0,
   onOpenMobileFilters,
   onOpenDeckDrawer,
   onOpenDeckManager,
+  onOpenFriends,
+  onOpenCloudAuthOrAccount,
   onMatchCommanderSynergy,
   onFindPartner,
   onClearCommanders,
@@ -233,6 +253,123 @@ export function HeaderBar({
               {totalDeckCards}/100
             </span>
           </button>
+
+          {onOpenFriends && (
+            <button
+              type="button"
+              onClick={onOpenFriends}
+              title="Friends & Shared Decks"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-indigo-400/60 hover:text-indigo-200"
+            >
+              <Users className="h-3.5 w-3.5 text-indigo-400" />
+              <span className="hidden md:inline">Friends</span>
+              {incomingFriendRequestsCount > 0 && (
+                <span
+                  data-testid="friends-request-badge"
+                  className="inline-flex min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 font-mono text-[10px] font-bold leading-none text-slate-950"
+                >
+                  {incomingFriendRequestsCount}
+                </span>
+              )}
+            </button>
+          )}
+
+          {onOpenCloudAuthOrAccount && (() => {
+            if (!cloudUser) {
+              return (
+                <button
+                  type="button"
+                  onClick={onOpenCloudAuthOrAccount}
+                  title="Sign in for cloud deck sync & friends"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-amber-400/60 hover:text-amber-200"
+                >
+                  <LogIn className="h-3.5 w-3.5 text-amber-400" />
+                  <span>Sign In</span>
+                </button>
+              );
+            }
+
+            const needsVerification = !cloudUser.emailVerified;
+            const hasConflict = conflictCount > 0 || cloudSyncStatus === 'conflict';
+            const handleLabel = cloudProfile?.handle
+              ? `@${cloudProfile.handle}`
+              : cloudUser.displayName || 'Account';
+
+            if (needsVerification) {
+              return (
+                <button
+                  type="button"
+                  onClick={onOpenCloudAuthOrAccount}
+                  title="Verify your email to enable cloud sync"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/50 bg-amber-500/15 px-2.5 py-1.5 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/25"
+                >
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                  {cloudProfile?.handle && (
+                    <span className="hidden max-w-[90px] truncate sm:inline">{handleLabel}</span>
+                  )}
+                  <span className="rounded bg-amber-500/30 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-100">
+                    Verify
+                  </span>
+                </button>
+              );
+            }
+
+            if (hasConflict) {
+              return (
+                <button
+                  type="button"
+                  onClick={onOpenCloudAuthOrAccount}
+                  title="Resolve cloud sync conflict"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/60 bg-amber-500/20 px-2.5 py-1.5 text-xs font-semibold text-amber-100 transition hover:bg-amber-500/30"
+                >
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-300" />
+                  <span className="hidden max-w-[90px] truncate sm:inline">{handleLabel}</span>
+                  <span className="rounded bg-amber-500/35 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-50">
+                    Conflict{conflictCount > 1 ? ` (${conflictCount})` : ''}
+                  </span>
+                </button>
+              );
+            }
+
+            const dotClass =
+              cloudSyncStatus === 'error'
+                ? 'bg-rose-400'
+                : cloudSyncStatus === 'pending'
+                  ? 'bg-amber-400'
+                  : cloudSyncStatus === 'synced'
+                    ? 'bg-emerald-400'
+                    : 'bg-slate-400';
+
+            const statusTitle = isCloudSyncing
+              ? 'Syncing decks with cloud...'
+              : cloudSyncStatus === 'synced'
+                ? 'Cloud synced'
+                : cloudSyncStatus === 'pending'
+                  ? 'Local changes waiting to sync'
+                  : cloudSyncStatus === 'error'
+                    ? 'Cloud sync error — click to inspect'
+                    : 'Signed in';
+
+            return (
+              <button
+                type="button"
+                onClick={onOpenCloudAuthOrAccount}
+                title={statusTitle}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-emerald-400/50 hover:text-white"
+              >
+                {isCloudSyncing ? (
+                  <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin text-sky-400" />
+                ) : (
+                  <Cloud className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                )}
+                <span className="max-w-[84px] truncate sm:max-w-[130px]">{handleLabel}</span>
+                <span
+                  aria-label={statusTitle}
+                  className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`}
+                />
+              </button>
+            );
+          })()}
 
           {/* Compact Telemetry Pill */}
           <div className="hidden items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900/90 px-2.5 py-1 text-[11px] text-slate-300 xl:inline-flex">
