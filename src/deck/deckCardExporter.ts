@@ -15,14 +15,24 @@ export const SNAPSHOT_CANVAS_WIDTH = 1200;
 export const SNAPSHOT_CANVAS_HEIGHT = 675;
 export const SNAPSHOT_FOOTER_TEXT = 'Ripple99 — Build Decks, Not Piles · ripple99.pages.dev';
 export const DEFAULT_SNAPSHOT_ORIGIN = 'https://ripple99.pages.dev';
+export const SNAPSHOT_QR_BADGE_SIZE = 100;
+export const SNAPSHOT_QR_BADGE_X = SNAPSHOT_CANVAS_WIDTH - 56 - SNAPSHOT_QR_BADGE_SIZE;
+export const SNAPSHOT_QR_BADGE_Y = 546;
+const SNAPSHOT_QR_MIN_MODULE_PX = 2;
+const SNAPSHOT_QR_MIN_QUIET_MODULES = 4;
 
 export interface SnapshotExportOptions {
   shareUrl?: string;
 }
 
+export type SnapshotQrLabel = 'Scan to Open' | 'Scan for Ripple99';
+
 export interface DeckSnapshotQrMetadata {
   shareUrl: string;
   included: boolean;
+  isFallback: boolean;
+  label: SnapshotQrLabel | null;
+  modulePx: number | null;
   version: number | null;
   size: number | null;
   ecLevel: QrErrorCorrectionLevel | null;
@@ -100,10 +110,30 @@ export function buildDefaultSnapshotShareUrl(
   return `${cleanOrigin}/?d=${encodeDeckToUrlParam(deck)}`;
 }
 
+function computeQrModulePixelSize(matrixSize: number): number {
+  return Math.floor(
+    SNAPSHOT_QR_BADGE_SIZE / (matrixSize + SNAPSHOT_QR_MIN_QUIET_MODULES * 2),
+  );
+}
+
+function tryEncodeScannableBadgeQr(
+  url: string,
+): { matrix: QrMatrixResult; modulePx: number } | null {
+  for (const level of ['M', 'L'] as const) {
+    const matrix = encodeQrMatrix(url, level);
+    if (!matrix) continue;
+    const modulePx = computeQrModulePixelSize(matrix.size);
+    if (modulePx >= SNAPSHOT_QR_MIN_MODULE_PX) {
+      return { matrix, modulePx };
+    }
+  }
+  return null;
+}
+
 function resolveSnapshotQr(
   deck: DeckDraft,
   options?: SnapshotExportOptions,
-): { metadata: DeckSnapshotQrMetadata; matrix: QrMatrixResult | null } {
+): { metadata: DeckSnapshotQrMetadata; matrix: QrMatrixResult | null; modulePx: number } {
   const rawShareUrl =
     options?.shareUrl !== undefined
       ? options.shareUrl.trim()
@@ -113,29 +143,69 @@ function resolveSnapshotQr(
       metadata: {
         shareUrl: '',
         included: false,
+        isFallback: false,
+        label: null,
+        modulePx: null,
         version: null,
         size: null,
         ecLevel: null,
       },
       matrix: null,
+      modulePx: 0,
     };
   }
 
-  // Prefer Medium EC on compact cloud links; use Low EC for denser ?d= payloads
-  const matrix =
-    rawShareUrl.length <= 400
-      ? (encodeQrMatrix(rawShareUrl, 'M') ?? encodeQrMatrix(rawShareUrl, 'L'))
-      : encodeQrMatrix(rawShareUrl, 'L');
+  const direct = tryEncodeScannableBadgeQr(rawShareUrl);
+  if (direct) {
+    return {
+      metadata: {
+        shareUrl: rawShareUrl,
+        included: true,
+        isFallback: false,
+        label: 'Scan to Open',
+        modulePx: direct.modulePx,
+        version: direct.matrix.version,
+        size: direct.matrix.size,
+        ecLevel: direct.matrix.ecLevel,
+      },
+      matrix: direct.matrix,
+      modulePx: direct.modulePx,
+    };
+  }
+
+  // Dense ?d= payloads (e.g. 100-card decks) exceed >=2px integer scaling with >=4-module quiet zone;
+  // fall back to the crisp Ripple99 homepage QR so every PNG snapshot remains scannable.
+  const fallback = tryEncodeScannableBadgeQr(DEFAULT_SNAPSHOT_ORIGIN);
+  if (fallback) {
+    return {
+      metadata: {
+        shareUrl: DEFAULT_SNAPSHOT_ORIGIN,
+        included: true,
+        isFallback: true,
+        label: 'Scan for Ripple99',
+        modulePx: fallback.modulePx,
+        version: fallback.matrix.version,
+        size: fallback.matrix.size,
+        ecLevel: fallback.matrix.ecLevel,
+      },
+      matrix: fallback.matrix,
+      modulePx: fallback.modulePx,
+    };
+  }
 
   return {
     metadata: {
-      shareUrl: rawShareUrl,
-      included: matrix !== null,
-      version: matrix?.version ?? null,
-      size: matrix?.size ?? null,
-      ecLevel: matrix?.ecLevel ?? null,
+      shareUrl: '',
+      included: false,
+      isFallback: false,
+      label: null,
+      modulePx: null,
+      version: null,
+      size: null,
+      ecLevel: null,
     },
-    matrix,
+    matrix: null,
+    modulePx: 0,
   };
 }
 
@@ -472,11 +542,13 @@ function drawRippleEmblem(ctx: CanvasRenderingContext2D, x: number, y: number, s
   ctx.restore();
 }
 
-const SNAPSHOT_QR_BADGE_SIZE = 92;
-const SNAPSHOT_QR_BADGE_X = SNAPSHOT_CANVAS_WIDTH - 56 - SNAPSHOT_QR_BADGE_SIZE;
-const SNAPSHOT_QR_BADGE_Y = 549;
+function drawSnapshotQrBadge(
+  ctx: CanvasRenderingContext2D,
+  matrix: QrMatrixResult,
+  modulePx: number,
+): void {
+  if (modulePx < SNAPSHOT_QR_MIN_MODULE_PX) return;
 
-function drawSnapshotQrBadge(ctx: CanvasRenderingContext2D, matrix: QrMatrixResult): void {
   ctx.save();
   drawRoundedRectPath(
     ctx,
@@ -492,13 +564,9 @@ function drawSnapshotQrBadge(ctx: CanvasRenderingContext2D, matrix: QrMatrixResu
   ctx.strokeStyle = 'rgba(203, 213, 225, 0.95)';
   ctx.stroke();
 
-  const innerMax = SNAPSHOT_QR_BADGE_SIZE - 10;
-  const isIntegerScale = matrix.size <= innerMax;
-  const cell = isIntegerScale ? Math.floor(innerMax / matrix.size) : innerMax / matrix.size;
-  const qrDrawSize = cell * matrix.size;
+  const qrDrawSize = modulePx * matrix.size;
   const originX = SNAPSHOT_QR_BADGE_X + Math.floor((SNAPSHOT_QR_BADGE_SIZE - qrDrawSize) / 2);
   const originY = SNAPSHOT_QR_BADGE_Y + Math.floor((SNAPSHOT_QR_BADGE_SIZE - qrDrawSize) / 2);
-  const moduleH = isIntegerScale ? cell : Math.max(0.75, cell);
 
   ctx.fillStyle = '#000000';
   for (let r = 0; r < matrix.size; r++) {
@@ -511,7 +579,12 @@ function drawSnapshotQrBadge(ctx: CanvasRenderingContext2D, matrix: QrMatrixResu
           c += 1;
         }
         const runLen = c - startCol;
-        ctx.fillRect(originX + startCol * cell, originY + r * cell, runLen * cell, moduleH);
+        ctx.fillRect(
+          originX + startCol * modulePx,
+          originY + r * modulePx,
+          runLen * modulePx,
+          modulePx,
+        );
       } else {
         c += 1;
       }
@@ -922,8 +995,15 @@ export async function renderDeckSnapshotCanvas(
   ctx.textAlign = 'right';
   ctx.fillText('100% Free · Local-First · Ad-Free', bottomRightBoundary, 624);
 
-  if (resolvedQr.matrix) {
-    drawSnapshotQrBadge(ctx, resolvedQr.matrix);
+  if (resolvedQr.matrix && resolvedQr.modulePx >= SNAPSHOT_QR_MIN_MODULE_PX) {
+    if (summary.qr.label) {
+      ctx.fillStyle = summary.qr.isFallback ? '#cbd5e1' : '#fde68a';
+      ctx.font = '700 12px Inter, system-ui, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(summary.qr.label, bottomRightBoundary, 603);
+    }
+    drawSnapshotQrBadge(ctx, resolvedQr.matrix, resolvedQr.modulePx);
   }
 
   return { canvas, summary };
