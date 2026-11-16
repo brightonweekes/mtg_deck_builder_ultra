@@ -94,6 +94,26 @@ describe('manaSymbolRegistry', () => {
       'C/B',
       'C/R',
       'C/G',
+      'X',
+      'x',
+      '0',
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7',
+      '8',
+      '9',
+      '10',
+      '11',
+      '12',
+      '13',
+      '14',
+      '15',
+      '16',
+      '20',
     ];
 
     for (const token of vectorTokens) {
@@ -126,8 +146,8 @@ describe('manaSymbolRegistry', () => {
     expect(getManaSymbolSvgSource('2/B')).toContain('<line');
     expect(getManaSymbolSvgSource('W/U')).not.toContain('<line');
 
-    // Numeric & X tokens fall back to generic typographic circles
-    for (const genericToken of ['0', '1', '2', '16', '20', 'X', 'x']) {
+    // Unknown/unlisted tokens still fall back cleanly to typographic generic circles
+    for (const genericToken of ['17', '99', 'CHAOS']) {
       const asset = resolveManaSymbolAsset(genericToken);
       expect(asset.kind).toBe('generic');
       if (asset.kind === 'generic') {
@@ -181,17 +201,13 @@ describe('manaSymbolRegistry', () => {
 
     for (const token of uniqueTokens) {
       const asset = resolveManaSymbolAsset(token);
-      if (/^(?:[0-9]+|X)$/i.test(token.trim())) {
-        expect(asset.kind, `Token {${token}} should be generic`).toBe('generic');
-      } else {
-        expect(asset.kind, `Token {${token}} should resolve to a vector SVG`).toBe('svg-img');
-        if (asset.kind === 'svg-img') {
-          const svg = decodeSvgDataUri(asset.src);
-          expect(svg).toContain('<svg');
-          expect(svg).toContain('</svg>');
-          expect(svg).not.toContain('undefined');
-          expect(svg).not.toContain('NaN');
-        }
+      expect(asset.kind, `Token {${token}} should resolve to a vector SVG`).toBe('svg-img');
+      if (asset.kind === 'svg-img') {
+        const svg = decodeSvgDataUri(asset.src);
+        expect(svg).toContain('<svg');
+        expect(svg).toContain('</svg>');
+        expect(svg).not.toContain('undefined');
+        expect(svg).not.toContain('NaN');
       }
     }
   });
@@ -216,8 +232,11 @@ describe('ManaSymbol UI components & integrations', () => {
     expect(costHtml).toContain('data-mana-symbol="W/U"');
     expect(costHtml).toContain('data-mana-symbol="2/B"');
     expect(costHtml).toContain('data-mana-symbol="G/W/P"');
-    expect(costHtml).toContain('>2<');
-    expect(costHtml).toContain('>X<');
+    expect(costHtml).toContain('data-mana-symbol="2"');
+    expect(costHtml).toContain('data-mana-symbol="X"');
+
+    const fallbackHtml = renderToStaticMarkup(<ManaSymbolBadge symbol="99" size="sm" />);
+    expect(fallbackHtml).toContain('>99<');
 
     const colorlessIdentityHtml = renderToStaticMarkup(<ColorIdentityBadges colors={[]} />);
     expect(colorlessIdentityHtml).toContain('data-mana-symbol="C"');

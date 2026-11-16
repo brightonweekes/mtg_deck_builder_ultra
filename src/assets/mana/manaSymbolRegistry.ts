@@ -1,3 +1,21 @@
+import n0Raw from './0.svg?raw';
+import n1Raw from './1.svg?raw';
+import n2Raw from './2.svg?raw';
+import n3Raw from './3.svg?raw';
+import n4Raw from './4.svg?raw';
+import n5Raw from './5.svg?raw';
+import n6Raw from './6.svg?raw';
+import n7Raw from './7.svg?raw';
+import n8Raw from './8.svg?raw';
+import n9Raw from './9.svg?raw';
+import n10Raw from './10.svg?raw';
+import n11Raw from './11.svg?raw';
+import n12Raw from './12.svg?raw';
+import n13Raw from './13.svg?raw';
+import n14Raw from './14.svg?raw';
+import n15Raw from './15.svg?raw';
+import n16Raw from './16.svg?raw';
+import n20Raw from './20.svg?raw';
 import bRaw from './B.svg?raw';
 import cRaw from './C.svg?raw';
 import eRaw from './E.svg?raw';
@@ -11,6 +29,7 @@ import tRaw from './T.svg?raw';
 import tkRaw from './TK.svg?raw';
 import uRaw from './U.svg?raw';
 import wRaw from './W.svg?raw';
+import xRaw from './X.svg?raw';
 
 export interface ManaSymbolAsset {
   kind: 'svg-img';
@@ -49,6 +68,25 @@ const STATIC_RAW_SVGS: Readonly<Record<string, { raw: string; shape: 'circle' | 
   TK: { raw: tkRaw, shape: 'circle' },
   P: { raw: pRaw, shape: 'circle' },
   H: { raw: hRaw, shape: 'circle' },
+  X: { raw: xRaw, shape: 'circle' },
+  '0': { raw: n0Raw, shape: 'circle' },
+  '1': { raw: n1Raw, shape: 'circle' },
+  '2': { raw: n2Raw, shape: 'circle' },
+  '3': { raw: n3Raw, shape: 'circle' },
+  '4': { raw: n4Raw, shape: 'circle' },
+  '5': { raw: n5Raw, shape: 'circle' },
+  '6': { raw: n6Raw, shape: 'circle' },
+  '7': { raw: n7Raw, shape: 'circle' },
+  '8': { raw: n8Raw, shape: 'circle' },
+  '9': { raw: n9Raw, shape: 'circle' },
+  '10': { raw: n10Raw, shape: 'circle' },
+  '11': { raw: n11Raw, shape: 'circle' },
+  '12': { raw: n12Raw, shape: 'circle' },
+  '13': { raw: n13Raw, shape: 'circle' },
+  '14': { raw: n14Raw, shape: 'circle' },
+  '15': { raw: n15Raw, shape: 'circle' },
+  '16': { raw: n16Raw, shape: 'circle' },
+  '20': { raw: n20Raw, shape: 'circle' },
 };
 
 const GLYPH_CENTERS: Readonly<Record<'W' | 'U' | 'B' | 'R' | 'G' | 'C', [number, number]>> = {
@@ -195,8 +233,8 @@ function toSvgDataUri(svg: string): string {
 }
 
 /**
- * Returns raw SVG markup for any vector mana/card symbol token (base or composite split/Phyrexian),
- * or `null` if the token should render as typographic generic text (e.g. numbers `{1}`..`{20}`, `{X}`).
+ * Returns raw SVG markup for any vector mana/card symbol token (base, generic numerals/`X`,
+ * utility, or composite split/Phyrexian), or `null` if an unrecognized token falls back to text.
  */
 export function getManaSymbolSvgSource(rawToken: string): string | null {
   const upper = rawToken.trim().toUpperCase();

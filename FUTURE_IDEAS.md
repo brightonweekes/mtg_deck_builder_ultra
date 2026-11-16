@@ -119,3 +119,28 @@ Refinements to make Firebase email/password account verification and password-re
 * **Progressive \$0 improvements:**
   * **Phase 1 — `ActionCodeSettings` Return Link (`continueUrl`):** Pass `{ url: window.location.origin }` (on an Authorized Domain from [`CLOUD_SETUP.md`](./CLOUD_SETUP.md#L67-L78)) through `FirebaseAuthOps` in [`firebaseProvider.ts`](./src/cloud/firebaseProvider.ts#L126-L197) so Firebase's hosted confirmation screen displays a **Continue** button returning the user straight to the app (and optionally auto-refresh auth verification state when returning with a query flag or on window focus).
   * **Phase 2 — In-App Custom Email Action Handler:** Parse `?mode=verifyEmail&oobCode=...` (and `resetPassword`) on mount in [`App.tsx`](./src/App.tsx#L311-L325), apply the code client-side via `applyActionCode()` (or `verifyPasswordResetCode()` / `confirmPasswordReset()`), immediately call `reloadUser()` so `email_verified` updates and cloud sync unlocks automatically, and point Firebase's template **Action URL** (once unlocked via Support) to the Cloudflare Pages app URL so both the email link and confirmation screen match the app's UI.
+
+---
+
+## 5. Deck Analytics UX Polish & Customizable Targets
+
+Improvements to make deckbuilding metrics self-explanatory for all MTG players and let builders tailor benchmarks to their deck's strategy:
+
+### Contextual Hover Tooltips & Legends (`Pips vs. Mana Sources`, `"Source Hits"`, etc.)
+* **Current limitation:** In [`DeckWorkspace.tsx`](./src/components/DeckWorkspace.tsx#L745-L793), the **Pips vs. Mana Sources** panel renders two stacked bars per color without a legend distinguishing the **Pips** bar from the **Sources** bar, and displays a combined `"source hits"` figure (`totalSources` in [`deckAnalytics.ts`](./src/deck/deckAnalytics.ts#L280-L309)) that sums per-color supply counts across colors without explaining that multi-color producers (e.g., dual lands, `Command Tower`, `Arcane Signet`) count once per color produced.
+* **Planned upgrades:**
+  * **Bar Legend & Plain-Language Labels:** Add an inline legend (matching the **Mana Curve** panel's `Creatures` / `Non-Creatures` legend) clearly identifying **Pips (cost demand)** vs. **Mana Sources (lands & ramp)**, and consider clearer wording or breakdown around `"source hits"`.
+  * **Hover / Focus Info Tooltips:** Add accessible hover/focus tooltips (`?` info badges and bar/metric hover states) explaining MTG deckbuilding terms such as **Color Pips**, **Mana Sources**, **Source Hits** (why dual/rainbow producers increment multiple colors), **Avg MV**, and **Synergy Score**.
+  * **Per-Color Contributor Breakdown on Hover:** Optionally preview which specific lands/ramp cards in the deck contribute to a color's `src` count (or which spells contribute to its `pips`) when hovering that bar.
+
+### Customizable Commander Role Targets
+* **Current limitation:** [`ROLE_TARGETS`](./src/deck/deckAnalytics.ts#L11-L26) uses fixed global benchmarks (Lands `36`, Ramp `10`, Card Draw `10`, Targeted Removal `8`, Board Wipes `3`, Tutors `2`, Recursion `3`, Protection `3`) rendered in [`DeckWorkspace.tsx`](./src/components/DeckWorkspace.tsx#L796-L840), even when a deck intentionally runs more/fewer slots for a category (e.g., a Lands-matter deck wanting `40+` Lands, or a casual pod setting Tutors to `0`).
+* **Planned upgrades:**
+  * **Editable Targets Per Deck (with Global Defaults):** Allow clicking an edit toggle on **Commander Role Targets** to adjust recommended counts and healthy minimums (`targetMin` / `recommended`) per deck—and persist overrides on the deck record (and optionally as default user preferences).
+  * **Strategy & Bracket Presets:** Offer one-click archetype presets (e.g., *Balanced Commander*, *Ramp / Landfall*, *Spellslinger / Low Curve*, *Zero-Tutor Casual*, *High-Power / cEDH*) so players can pick a baseline template and fine-tune individual roles from there.
+
+### Deck Editing Undo / Redo History
+* **Concept:** Allow builders to safely experiment with cuts, swaps, and bulk edits—such as *Auto-Fill Basics*, *Move Illegal to Considering*, commander swaps, and quantity changes—without losing track of what was just removed or added.
+* **Planned upgrades:**
+  * **Toolbar Undo & Redo Buttons + Shortcuts:** Surface **Undo** / **Redo** buttons (with `Ctrl+Z` / `Cmd+Z` and `Ctrl+Shift+Z` / `Cmd+Shift+Z` / `Ctrl+Y` keyboard shortcuts when not focused in a text input) in the deck workspace and quick deck drawer, complete with descriptive action tooltips (e.g., *"Undo: Remove Sol Ring"* or *"Undo: Auto-Fill Basics"*).
+  * **Per-Deck Snapshot / Action Stack:** Maintain an in-memory bounded history stack (e.g., last 30–50 mutations per active deck) covering mainboard/sideboard card changes, commander updates, role/target edits, and deck imports, automatically persisting the restored state cleanly through `IndexedDB` and cloud sync.
