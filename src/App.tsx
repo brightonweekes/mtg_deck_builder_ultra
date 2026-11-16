@@ -6,12 +6,15 @@ import { ActiveFilterBar } from './components/ActiveFilterBar.js';
 import { AuthModal } from './components/AuthModal.js';
 import { CardDetailModal } from './components/CardDetailModal.js';
 import { CardGrid } from './components/CardGrid.js';
+import { DeckAuditModal } from './components/DeckAuditModal.js';
 import { DeckManagerModal, type DeckManagerTab } from './components/DeckManagerModal.js';
 import { DeckWorkspace } from './components/DeckWorkspace.js';
 import { FilterSidebar } from './components/FilterSidebar.js';
 import { FriendsModal } from './components/FriendsModal.js';
 import { HeaderBar } from './components/HeaderBar.js';
+import { LegalFooter } from './components/LegalFooter.js';
 import { QuickDeckDrawer } from './components/QuickDeckDrawer.js';
+import { QuickStartBanner } from './components/QuickStartBanner.js';
 import { SharedDeckBanner } from './components/SharedDeckBanner.js';
 import { SyncConflictModal } from './components/SyncConflictModal.js';
 import { generateDeckId } from './db/deckDb.js';
@@ -55,6 +58,41 @@ function stripUrlQueryParams(...keys: string[]): void {
   }
 }
 
+export function hasAuthReturnIntent(search: string): boolean {
+  if (!search || typeof search !== 'string') return false;
+  try {
+    const params = new URLSearchParams(search);
+    return params.get('authReturn') === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function hasCloudUrlIntent(search: string): boolean {
+  if (!search || typeof search !== 'string') return false;
+  try {
+    const intents = parseCloudUrlIntents(search);
+    if (intents.sharedDeckId || intents.addFriendHandle) {
+      return true;
+    }
+    const params = new URLSearchParams(search);
+    if (params.has('authReturn') && params.get('authReturn') !== '0') {
+      return true;
+    }
+    const mode = params.get('mode');
+    if (
+      mode === 'verifyEmail' ||
+      mode === 'resetPassword' ||
+      Boolean(params.get('oobCode')?.trim())
+    ) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export function App() {
   const {
     syncStatus,
@@ -68,7 +106,10 @@ export function App() {
     resolveCards,
   } = useCardSearch();
 
-  const cloudAuth = useCloudAuth();
+  const [hasCloudUrlIntentOnMount] = useState(() =>
+    typeof window !== 'undefined' ? hasCloudUrlIntent(window.location.search) : false,
+  );
+  const cloudAuth = useCloudAuth({ autoConnect: hasCloudUrlIntentOnMount });
   const friends = useFriends(cloudAuth.user, cloudAuth.profile);
 
   const scheduleCloudPushRef = useRef<() => void>(() => {});
@@ -150,6 +191,7 @@ export function App() {
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [deckDrawerOpen, setDeckDrawerOpen] = useState(false);
   const [deckManagerTab, setDeckManagerTab] = useState<DeckManagerTab | null>(null);
+  const [auditModalOpen, setAuditModalOpen] = useState(false);
   const [inspectedMatch, setInspectedMatch] = useState<ScoredCardMatch | null>(null);
 
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -167,6 +209,10 @@ export function App() {
 
   const handledShareUrlRef = useRef(false);
   const handledCloudUrlRef = useRef(false);
+  const initialAuthReturnRef = useRef<boolean>(
+    typeof window !== 'undefined' && hasAuthReturnIntent(window.location.search),
+  );
+  const handledAuthReturnRef = useRef(false);
   const promptedAuthForFriendRef = useRef(false);
   const openedFriendsForPendingRef = useRef(false);
 
@@ -355,6 +401,19 @@ export function App() {
       setAuthModalOpen(false);
     }
   }, [authModalOpen, cloudAuth.user?.emailVerified, pendingFriendHandle]);
+
+  // Refresh verification status if returning via email continueUrl (?authReturn=1)
+  useEffect(() => {
+    if (handledAuthReturnRef.current || !initialAuthReturnRef.current) return;
+    if (cloudAuth.authLoading) return;
+    handledAuthReturnRef.current = true;
+    stripUrlQueryParams('authReturn');
+    if (cloudAuth.user) {
+      void cloudAuth.refreshVerificationStatus().catch(() => {
+        // Error surfaced via cloudAuth.error
+      });
+    }
+  }, [cloudAuth]);
 
   // Resolve commander cards for SharedDeckBanner preview once catalog is ready
   useEffect(() => {
@@ -583,16 +642,18 @@ export function App() {
   );
 
   const handleQuickFilterRole = useCallback(
-    (role: FunctionalRole | 'lands') => {
+    (role: FunctionalRole | 'lands', overrideColorIdentity?: ManaColor[] | null) => {
       updateFilter({
         roles: role === 'lands' ? [] : [role],
         cardTypes: role === 'lands' ? ['Land'] : [],
         commanderOnly: false,
         partnerType: null,
         colorIdentity:
-          deck.lockSearchToCommanderIdentity && deck.commanders.length > 0
-            ? combinedColorIdentity
-            : filter.colorIdentity,
+          overrideColorIdentity !== undefined
+            ? overrideColorIdentity
+            : deck.lockSearchToCommanderIdentity && deck.commanders.length > 0
+              ? combinedColorIdentity
+              : filter.colorIdentity,
       });
       setActiveTab('search');
     },
@@ -601,6 +662,36 @@ export function App() {
       deck.commanders.length,
       deck.lockSearchToCommanderIdentity,
       filter.colorIdentity,
+      updateFilter,
+    ],
+  );
+
+  const handleSelectSampleCommander = useCallback(
+    (card: CompactCard) => {
+      const nextIdentity = setCommander(card);
+      if (nextIdentity === null) return;
+      const synergyQuery = buildCommanderSynergyQuery([card]);
+      updateFilter(
+        {
+          themeQuery: synergyQuery,
+          sortBy: synergyQuery ? 'synergy' : filter.sortBy,
+          themes: [],
+          roles: [],
+          commanderOnly: false,
+          partnerType: null,
+          colorIdentity: deck.lockSearchToCommanderIdentity
+            ? nextIdentity
+            : filter.colorIdentity,
+        },
+        { immediate: true },
+      );
+      setActiveTab('search');
+    },
+    [
+      deck.lockSearchToCommanderIdentity,
+      filter.colorIdentity,
+      filter.sortBy,
+      setCommander,
       updateFilter,
     ],
   );
@@ -687,6 +778,7 @@ export function App() {
   );
 
   const handleOpenCloudAuthOrAccount = useCallback(() => {
+    cloudAuth.activateCloud();
     if (!cloudAuth.user || !cloudAuth.user.emailVerified) {
       cloudAuth.clearError();
       setAuthModalOpen(true);
@@ -702,9 +794,10 @@ export function App() {
   }, [cloudAuth, cloudSync]);
 
   const handleOpenFriendsModal = useCallback(() => {
+    cloudAuth.activateCloud();
     friends.clearError();
     setFriendsModalOpen(true);
-  }, [friends]);
+  }, [cloudAuth, friends]);
 
   const handleExportAccountData = useCallback(async () => {
     let url: string | null = null;
@@ -717,7 +810,7 @@ export function App() {
       const a = document.createElement('a');
       a.href = url;
       const handleSlug = cloudAuth.profile?.handle || 'commander-vault';
-      a.download = `mtg-ultra-backup-${handleSlug}-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `ripple99-backup-${handleSlug}-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       setCloudNotice({ message: 'Downloaded cloud & local JSON backup.' });
     } catch (err) {
@@ -785,32 +878,34 @@ export function App() {
   const isReady = syncStatus.stage === 'ready';
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      <HeaderBar
-        query={filter.query}
-        onQueryChange={(query) => updateFilter({ query })}
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        commanders={deck.commanders}
-        totalDeckCards={totalCardCount}
-        syncStatus={syncStatus}
-        searchResult={searchResult}
-        cloudUser={cloudAuth.user}
-        cloudProfile={cloudAuth.profile}
-        cloudSyncStatus={cloudSync.overallSyncStatus}
-        isCloudSyncing={cloudSync.isSyncing}
-        conflictCount={cloudSync.conflicts.length}
-        incomingFriendRequestsCount={friends.incomingRequests.length}
-        onOpenMobileFilters={() => setMobileFiltersOpen(true)}
-        onOpenDeckDrawer={() => setDeckDrawerOpen(true)}
-        onOpenDeckManager={() => setDeckManagerTab('decks')}
-        onOpenFriends={handleOpenFriendsModal}
-        onOpenCloudAuthOrAccount={handleOpenCloudAuthOrAccount}
-        onMatchCommanderSynergy={handleMatchCommanderSynergy}
-        onFindPartner={handleFindPartner}
-        onClearCommanders={handleClearCommanders}
-        onForceResync={forceResync}
-      />
+    <div className="flex min-h-screen flex-col bg-slate-950 text-slate-100">
+      <div className="flex-1">
+        <HeaderBar
+          query={filter.query}
+          onQueryChange={(query) => updateFilter({ query })}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          commanders={deck.commanders}
+          totalDeckCards={totalCardCount}
+          syncStatus={syncStatus}
+          searchResult={searchResult}
+          cloudUser={cloudAuth.user}
+          cloudProfile={cloudAuth.profile}
+          cloudSyncStatus={cloudSync.overallSyncStatus}
+          isCloudSyncing={cloudSync.isSyncing}
+          conflictCount={cloudSync.conflicts.length}
+          incomingFriendRequestsCount={friends.incomingRequests.length}
+          onOpenMobileFilters={() => setMobileFiltersOpen(true)}
+          onOpenDeckDrawer={() => setDeckDrawerOpen(true)}
+          onOpenDeckManager={() => setDeckManagerTab('decks')}
+          onOpenAudit={() => setAuditModalOpen(true)}
+          onOpenFriends={handleOpenFriendsModal}
+          onOpenCloudAuthOrAccount={handleOpenCloudAuthOrAccount}
+          onMatchCommanderSynergy={handleMatchCommanderSynergy}
+          onFindPartner={handleFindPartner}
+          onClearCommanders={handleClearCommanders}
+          onForceResync={forceResync}
+        />
 
       {/* IndexedDB Sync Progress / Error Banner */}
       {!isReady && (
@@ -850,43 +945,52 @@ export function App() {
 
       {/* Workspace Switch: Catalog Search vs Full Deck Studio */}
       {activeTab === 'search' ? (
-        <div className="mx-auto flex max-w-[1600px] items-start gap-5 px-4 py-4">
-          <FilterSidebar
-            filter={filter}
-            commanders={deck.commanders}
-            mobileOpen={mobileFiltersOpen}
-            onCloseMobile={() => setMobileFiltersOpen(false)}
-            onUpdateFilter={updateFilter}
-            onResetFilters={handleResetFilters}
-            onFindPartner={handleFindPartner}
+        <>
+          <QuickStartBanner
+            activeTab={activeTab}
+            totalCatalogCards={syncStatus.manifest?.totalCards ?? 32643}
+            resolveCards={resolveCards}
+            onOpenAudit={() => setAuditModalOpen(true)}
+            onSelectSampleCommander={handleSelectSampleCommander}
           />
-
-          <main className="min-w-0 flex-1 space-y-3">
-            <ActiveFilterBar
+          <div className="mx-auto flex max-w-[1600px] items-start gap-5 px-4 py-4">
+            <FilterSidebar
               filter={filter}
-              searchResult={searchResult}
-              isSearching={isSearching}
-              viewMode={viewMode}
-              onViewModeChange={setViewMode}
+              commanders={deck.commanders}
+              mobileOpen={mobileFiltersOpen}
+              onCloseMobile={() => setMobileFiltersOpen(false)}
               onUpdateFilter={updateFilter}
               onResetFilters={handleResetFilters}
+              onFindPartner={handleFindPartner}
             />
 
-            <CardGrid
-              searchResult={searchResult}
-              viewMode={viewMode}
-              commanders={deck.commanders}
-              enforceColorIdentity={deck.lockSearchToCommanderIdentity}
-              getCardQuantity={getCardQuantity}
-              isCommander={isCommander}
-              onPageChange={handlePageChange}
-              onInspectCard={setInspectedMatch}
-              onAddCard={addCard}
-              onSetCommander={handleSetCommander}
-              onAddPartner={handleAddPartner}
-            />
-          </main>
-        </div>
+            <main className="min-w-0 flex-1 space-y-3">
+              <ActiveFilterBar
+                filter={filter}
+                searchResult={searchResult}
+                isSearching={isSearching}
+                viewMode={viewMode}
+                onViewModeChange={setViewMode}
+                onUpdateFilter={updateFilter}
+                onResetFilters={handleResetFilters}
+              />
+
+              <CardGrid
+                searchResult={searchResult}
+                viewMode={viewMode}
+                commanders={deck.commanders}
+                enforceColorIdentity={deck.lockSearchToCommanderIdentity}
+                getCardQuantity={getCardQuantity}
+                isCommander={isCommander}
+                onPageChange={handlePageChange}
+                onInspectCard={setInspectedMatch}
+                onAddCard={addCard}
+                onSetCommander={handleSetCommander}
+                onAddPartner={handleAddPartner}
+              />
+            </main>
+          </div>
+        </>
       ) : (
         <DeckWorkspace
           deck={deck}
@@ -967,8 +1071,24 @@ export function App() {
           await cloudSync.syncNow();
         }}
         onOpenAuth={() => {
+          cloudAuth.activateCloud();
           cloudAuth.clearError();
           setAuthModalOpen(true);
+        }}
+      />
+
+      {/* Instant 99 Audit Modal */}
+      <DeckAuditModal
+        open={auditModalOpen}
+        activeDeck={deck}
+        activeDeckPriceUsd={totalDeckPriceUsd}
+        resolveCards={resolveCards}
+        onClose={() => setAuditModalOpen(false)}
+        onImportDeckDraft={handleImportDeckDraft}
+        onOpenCurrentStudio={() => setActiveTab('deck')}
+        onFindMissingRole={(role, auditedIdentity) => {
+          handleQuickFilterRole(role, auditedIdentity);
+          setAuditModalOpen(false);
         }}
       />
 
@@ -1044,6 +1164,7 @@ export function App() {
           friends.clearError();
         }}
         onOpenAuth={() => {
+          cloudAuth.activateCloud();
           setFriendsModalOpen(false);
           cloudAuth.clearError();
           setAuthModalOpen(true);
@@ -1129,6 +1250,9 @@ export function App() {
           </button>
         </div>
       )}
+      </div>
+
+      <LegalFooter />
     </div>
   );
 }

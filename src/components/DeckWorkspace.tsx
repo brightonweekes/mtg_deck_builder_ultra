@@ -9,6 +9,7 @@ import {
   Crown,
   FileText,
   FolderOpen,
+  ImageDown,
   Lock,
   Minus,
   Plus,
@@ -31,6 +32,7 @@ import {
   type DeckAnalyticsReport,
   type ManaPoolColor,
 } from '../deck/deckAnalytics.js';
+import { downloadDeckSnapshotPng } from '../deck/deckCardExporter.js';
 import { canAddCardToDeck, canHaveSecondCommander } from '../search/commanderRules.js';
 import type { CompactCard, FunctionalRole, ManaColor } from '../types/card.js';
 import type { DeckVisibility } from '../types/cloud.js';
@@ -83,6 +85,7 @@ interface DeckWorkspaceProps {
   onBackToSearch: () => void;
   onChooseCommander: () => void;
   onInspectCard: (card: CompactCard) => void;
+  onExportPng?: () => void | Promise<void>;
 }
 
 const BASIC_LAND_ORDER: ReadonlyArray<{
@@ -211,12 +214,30 @@ export function DeckWorkspace({
   onBackToSearch,
   onChooseCommander,
   onInspectCard,
+  onExportPng,
 }: DeckWorkspaceProps) {
   const [groupMode, setGroupMode] = useState<DeckGroupMode>('role');
   const [showConsidering, setShowConsidering] = useState(true);
   const [showPrimerNotes, setShowPrimerNotes] = useState(() =>
     Boolean(deck.description && deck.description.trim().length > 0),
   );
+  const [isExportingPng, setIsExportingPng] = useState(false);
+
+  const handleExportPng = async () => {
+    if (isExportingPng) return;
+    setIsExportingPng(true);
+    try {
+      if (onExportPng) {
+        await onExportPng();
+      } else {
+        await downloadDeckSnapshotPng(deck, analytics, totalDeckPriceUsd);
+      }
+    } catch {
+      // Ignore canvas export errors cleanly in restricted environments
+    } finally {
+      setIsExportingPng(false);
+    }
+  };
 
   const illegalSet = useMemo(
     () => new Set(analytics.illegalColorCardIds),
@@ -383,6 +404,17 @@ export function DeckWorkspace({
           >
             <Share2 className="h-3.5 w-3.5 text-violet-400" />
             Share Link
+          </button>
+
+          <button
+            type="button"
+            disabled={isExportingPng}
+            onClick={() => void handleExportPng()}
+            title="Download 1200x675 Ripple99 Deck Snapshot PNG"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 font-semibold text-slate-200 transition hover:border-emerald-400/50 hover:text-emerald-200 disabled:opacity-50"
+          >
+            <ImageDown className="h-3.5 w-3.5 text-emerald-400" />
+            {isExportingPng ? 'Exporting...' : 'Export PNG'}
           </button>
 
           <button
