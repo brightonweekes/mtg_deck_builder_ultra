@@ -1,6 +1,6 @@
-# MTG Commander Deck Builder Ultra
+# Ripple99 — Build Decks, Not Piles
 
-Fast, offline-capable, browser-native Commander deck builder powered by a pre-tagged Scryfall catalog (`32,643` Commander-legal cards), client-side `IndexedDB` persistence (`Dexie`), an instant Web Worker bitmask search & Method A theme-synergy engine, and a full interactive Commander Deck Studio.
+Fast, offline-capable, browser-native MTG Commander deck builder ([ripple99.pages.dev](https://ripple99.pages.dev/)) powered by a pre-tagged Scryfall catalog (`32,643` Commander-legal cards), client-side `IndexedDB` persistence (`Dexie`), an instant Web Worker bitmask search & Method A theme-synergy engine, and a full interactive Commander Deck Studio.
 
 ---
 
@@ -45,7 +45,9 @@ npm run build
 
 * **Nightly Card Updates (`.github/workflows/update-cards.yml`):** Runs daily at `04:00 UTC` (or on demand via **Workflow Dispatch**), refreshes Scryfall data, runs `typecheck` + `test` + `build`, commits `public/data/` only when the SHA-256 catalog version changes, and triggers Cloudflare Pages via `CLOUDFLARE_DEPLOY_HOOK_URL`.
 * **Cloudflare Pages Settings:**
+  * **Production URL:** [https://ripple99.pages.dev/](https://ripple99.pages.dev/)
   * **Build command:** `npm run build`
   * **Build output directory:** `dist`
   * **Node version:** Pinned automatically via `.nvmrc` (`22`)
   * **Edge headers:** Configured via `public/_headers` (fast revalidation for `manifest.json`, immutable caching for versioned `cards.min.json?v=...` and `/assets/*`, Brotli compression over the wire).
+  * **Optional Cloud Sync & Analytics:** See [`CLOUD_SETUP.md`](./CLOUD_SETUP.md) for optional free-tier Firebase Spark deck sync/friend sharing and cookie-less Cloudflare Web Analytics (`VITE_CF_ANALYTICS_TOKEN`).

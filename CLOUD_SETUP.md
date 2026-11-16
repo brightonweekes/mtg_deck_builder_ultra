@@ -1,6 +1,8 @@
-# Cloud Sync & Friend Sharing Setup Guide (100% Free Firebase Spark Tier)
+# Ripple99 — Cloud Sync & Friend Sharing Setup Guide (100% Free Firebase Spark Tier)
 
-MTG Commander Deck Builder Ultra is **local-first by default**. If you do not configure any cloud environment variables, the app runs entirely in your browser using `IndexedDB` (`Dexie`) with zero network calls outside static Scryfall artwork (`cards.scryfall.io`).
+> **Build Decks, Not Piles** · Production URL: [`https://ripple99.pages.dev/`](https://ripple99.pages.dev/)
+
+Ripple99 is **local-first by default**. If you do not configure any cloud environment variables, the app runs entirely in your browser using `IndexedDB` (`Dexie`) with zero network calls outside static Scryfall artwork (`cards.scryfall.io`).
 
 When you want **multi-device deck sync**, **binders/wishlists/trade lists**, **short cloud share links (`?deck=...`)**, and **friend deck browsing**, you can connect your own **free Firebase Spark project** in ~10 minutes — **no credit card required**.
 
@@ -24,7 +26,7 @@ When you want **multi-device deck sync**, **binders/wishlists/trade lists**, **s
 
 1. Go to the [Firebase Console](https://console.firebase.google.com/) and sign in with a Google account.
 2. Click **Create a project** (or **Add project**).
-3. Enter a project name (for example, `mtg-deck-builder-cloud`) and click **Continue**.
+3. Enter a project name (for example, `ripple99-cloud`) and click **Continue**.
 4. You can **disable Google Analytics** (recommended to keep setup minimal and privacy-focused), then click **Create project**.
 5. Confirm your project is on the **Spark plan ($0/month)** in the bottom-left billing badge — **never upgrade to Blaze unless you want paid limits; no credit card is needed for Spark**.
 
@@ -33,7 +35,7 @@ When you want **multi-device deck sync**, **binders/wishlists/trade lists**, **s
 ## 2. Register Your Web App & Copy Firebase Config
 
 1. On your Firebase Project Overview page, click the **Web (`</>`)** icon to register a web app.
-2. Give it a nickname (e.g., `commander-builder-web`). Leave **Firebase Hosting** unchecked (you are hosting on Cloudflare Pages).
+2. Give it a nickname (e.g., `ripple99-web`). Leave **Firebase Hosting** unchecked (you are hosting on Cloudflare Pages).
 3. Click **Register app**.
 4. Firebase displays a `firebaseConfig` snippet containing these 4 fields you need:
    - `apiKey` → `VITE_FIREBASE_API_KEY`
@@ -54,6 +56,14 @@ When you want **multi-device deck sync**, **binders/wishlists/trade lists**, **s
 
 > **Email Verification Required:** `firestore.rules` strictly requires `email_verified == true` for all account writes, profile lookups, friend connections, and private/friend deck reads. Google Sign-In verifies emails automatically; Email/Password sign-ups receive a verification email before cloud sync unlocks.
 
+### 3.2 Configure Auth Email Public-Facing Name (`Ripple99`)
+
+Out-of-the-box Firebase verification and password-reset emails display a generic `project-<project-number>` name unless you set the project's public name:
+
+1. Open **Firebase Console → Project settings → General**.
+2. Set **Public-facing name** to **`Ripple99`** (and optionally confirm the same **App name** under **Google Cloud Console → APIs & Services → OAuth consent screen**).
+3. Firebase will automatically use **`Ripple99`** for `%APP_NAME%` in email verification and password-reset subjects and sign-offs.
+
 ### 3.3 Enable Email Enumeration Protection & Password Policy
 
 1. Open **Build → Authentication → Settings → User actions** in the Firebase Console and confirm **Email enumeration protection** is **Enabled** (recommended so sign-in/reset endpoints never reveal whether an email address is registered).
@@ -71,10 +81,10 @@ Firebase Auth rejects OAuth popups/redirects from domains that are not explicitl
 1. Go to **Build → Authentication → Settings → Authorized domains**.
 2. `localhost` and `<your-project-id>.firebaseapp.com` are already included for local testing.
 3. Click **Add domain** and add your exact Cloudflare Pages production domain:
-   - Example: `mtg-deck-builder-ultra.pages.dev`
+   - Example: `ripple99.pages.dev`
    - If you use a custom domain (e.g., `decks.example.com`), add that too.
 
-> **Important Cloudflare Pages Tip:** Firebase Auth **does not support wildcard domains** like `*.pages.dev`. Always add your exact `<project>.pages.dev` hostname (and any custom domain or specific branch preview URL if you test Auth on previews).
+> **Important Cloudflare Pages Tip:** Firebase Auth **does not support wildcard domains** like `*.pages.dev`. Always add your exact `<project>.pages.dev` hostname (such as `ripple99.pages.dev`, plus any custom domain or specific branch preview URL if you test Auth on previews).
 
 ---
 
@@ -147,10 +157,18 @@ Restart `npm run dev` so Vite picks up the new environment variables. (Keep `.en
 
 1. Log in to the [Cloudflare Dashboard](https://dash.cloudflare.com/) → **Workers & Pages** → select your Pages project.
 2. Go to **Settings → Environment variables**.
-3. Add each variable (`VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID`, and optionally `VITE_FIREBASE_APP_CHECK_SITE_KEY`) under **Production** (and **Preview** if desired).
+3. Add each variable (`VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID`, and optionally `VITE_FIREBASE_APP_CHECK_SITE_KEY` and `VITE_CF_ANALYTICS_TOKEN`) under **Production** (and **Preview** if desired).
 4. **Trigger a new deployment** (Vite embeds `VITE_*` variables at build time, so existing builds do not pick up newly added variables until redeployed).
 
-> **CSP Headers Ready:** [`public/_headers`](./public/_headers) already configures a production `Content-Security-Policy` allowing Scryfall artwork (`cards.scryfall.io`), Firebase Auth/Firestore endpoints, Google OAuth popups/frames, and optional Fraud Defense (reCAPTCHA Enterprise) App Check while avoiding `Cross-Origin-Embedder-Policy: require-corp` so card artwork loads normally.
+> **CSP Headers Ready:** [`public/_headers`](./public/_headers) already configures a production `Content-Security-Policy` allowing Scryfall artwork (`cards.scryfall.io`), Firebase Auth/Firestore endpoints, Google OAuth popups/frames, optional Fraud Defense (reCAPTCHA Enterprise) App Check, and optional Cloudflare Web Analytics (`static.cloudflareinsights.com` / `cloudflareinsights.com`) while avoiding `Cross-Origin-Embedder-Policy: require-corp` so card artwork loads normally.
+
+### Optional: Cookie-Less Cloudflare Web Analytics (`VITE_CF_ANALYTICS_TOKEN`)
+
+Ripple99 supports optional, cookie-less **Cloudflare Web Analytics** (zero cookies, zero ad trackers):
+
+1. In the Cloudflare Dashboard, open **Web Analytics → Add a site** for `ripple99.pages.dev` and copy the beacon **Token**.
+2. Add `VITE_CF_ANALYTICS_TOKEN=<your-token>` in **Cloudflare Pages → Settings → Environment variables** (Production) and trigger a new deployment.
+3. Leave `VITE_CF_ANALYTICS_TOKEN` unset if you do not want analytics enabled—[`src/main.tsx`](./src/main.tsx) only injects the deferred `static.cloudflareinsights.com/beacon.min.js` script in the browser when a non-empty token is present.
 
 ---
 
@@ -159,7 +177,7 @@ Restart `npm run dev` so Vite picks up the new environment variables. (Keep `.en
 To add extra protection against automated abuse or script scraping against your Spark quota using Google Cloud **Fraud Defense** (reCAPTCHA Enterprise — which replaces deprecated reCAPTCHA Classic):
 
 1. Open [Google Cloud Console → Fraud Defense / reCAPTCHA](https://console.cloud.google.com/security/recaptcha), select your Firebase project (`<your-project-id>`), and enable the **reCAPTCHA Enterprise API** if prompted.
-2. Click **Create key**, select **Web**, leave checkbox challenges disabled (**score-based** key required), and add your **production** domain(s) (e.g., `mtg-deck-builder-ultra.pages.dev` and any custom domain — **do not** add `localhost` to a production key). Copy the generated **Site Key**.
+2. Click **Create key**, select **Web**, leave checkbox challenges disabled (**score-based** key required), and add your **production** domain(s) (e.g., `ripple99.pages.dev` and any custom domain — **do not** add `localhost` to a production key). Copy the generated **Site Key**.
    - *Free Spark allowance:* No billing account is required on Spark; Google includes **10,000 assessments/month free** (returning `429` rather than billing if exceeded on Spark).
 3. In Firebase Console → **Build → App Check → Apps**, click your web app, expand **Fraud Defense (formerly known as reCAPTCHA Enterprise)**, paste the **reCAPTCHA Enterprise site key**, set **Token time to live (TTL)** (e.g., `4`–`24` hours to keep assessment counts minimal since tokens refresh around 50% of TTL), and click **Save**.
 4. Add `VITE_FIREBASE_APP_CHECK_SITE_KEY=<your-enterprise-site-key>` in Cloudflare Pages (**Settings → Environment variables** under Production/Preview) and trigger a new Cloudflare Pages deployment.
@@ -194,7 +212,7 @@ To add extra protection against automated abuse or script scraping against your 
 
 - **Verified Accounts Required:** Unverified accounts cannot read or write profiles, handles, friendships, friend catalogs, or private/friend decks (`request.auth.token.email_verified == true`).
 - **Zero Email Leakage:** `/profiles/{uid}` only stores public handle/display metadata and **strictly rejects any `email` field** at the database rules level.
-- **Immutable Handle Claims & Reserved Names:** Handles (`/handles/{handleLower}`) enforce lowercase uniqueness (`^[a-z0-9_-]{3,24}$`), block reserved names (`admin`, `system`, `support`, `moderator`, `wizards`, `official`), and cannot be hijacked or enumerated via `list`.
+- **Immutable Handle Claims & Reserved Names:** Handles (`/handles/{handleLower}`) enforce lowercase uniqueness (`^[a-z0-9_-]{3,24}$`), block reserved names (`admin`, `system`, `support`, `moderator`, `wizards`, `official`, `ripple`, `ripple99`), and cannot be hijacked or enumerated via `list`.
 - **Mutual Friend Verification:** Friend-only decks and `/friendCatalogs/{uid}` verify an `accepted` friendship document at deterministic ID `pairId(uidA, uidB)` before allowing access, and only the *recipient* of a pending request can transition `pending -> accepted`.
 - **Schema & Size Guardrails:** Every write validates field whitelists, visibility enums (`private`, `friends`, `link`, `public`), bounded array/map counts, and UTF-8 string byte caps, with a bottom catch-all `allow read, write: if false;` rule denying all unmapped paths.
 - **Recommended Production Bot & Quota Protection:** For public or high-traffic deployments, configure and **Enforce** **Firebase App Check (Fraud Defense / reCAPTCHA Enterprise)** on Cloud Firestore and Firebase Authentication (see Section 8) so automated scripts cannot drain your Spark daily read/write quotas.

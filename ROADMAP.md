@@ -1,6 +1,6 @@
-# MTG Commander Deck Builder — Technical Guide & V1 Roadmap
+# Ripple99 — Technical Guide & V1 Roadmap
 
-This document outlines the recommended stack, core concepts to research before coding, and the step-by-step milestone roadmap to launch V1 on **Cloudflare Pages** for **\$0/month**.
+**Build Decks, Not Piles.** This document outlines the recommended stack, core concepts to research before coding, and the step-by-step milestone roadmap to launch Ripple99 V1 on **Cloudflare Pages** (`https://ripple99.pages.dev/`) for **\$0/month**.
 
 ---
 
@@ -106,7 +106,7 @@ Build in strict vertical slices—each milestone produces something testable on 
 **Goal:** Ship publicly to the world at \$0/month with rolling daily card updates.
 1. Push repository to GitHub.
 2. Create `.github/workflows/update-cards.yml` to run Milestone 1's `build-card-index.ts` script nightly at 04:00 UTC, committing updates to `public/data/` when Scryfall releases new cards or legality updates.
-3. Connect the GitHub repository to **Cloudflare Pages** (`npm run build`, output directory `dist/`):
+3. Connect the GitHub repository to **Cloudflare Pages** (`npm run build`, output directory `dist/`, deployed at `https://ripple99.pages.dev/`):
    * Automatic global edge deployment on every push or nightly card update.
    * Cloudflare automatically applies Brotli compression when serving `cards.min.json`, shrinking the network transfer to ~4–5 MB.
    * Zero servers, unlimited bandwidth, \$0/month.

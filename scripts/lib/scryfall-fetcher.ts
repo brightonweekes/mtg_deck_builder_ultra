@@ -9,7 +9,7 @@ import type { ScryfallBulkDataResponse, ScryfallRawCard } from '../../src/types/
 
 const SCRYFALL_BULK_URL = 'https://api.scryfall.com/bulk-data/oracle-cards';
 export const SCRYFALL_HEADERS = {
-  'User-Agent': 'MTGDeckBuilderUltra/1.0 (Local Pipeline)',
+  'User-Agent': 'Ripple99/1.0 (Local Pipeline)',
   Accept: 'application/json',
 };
 

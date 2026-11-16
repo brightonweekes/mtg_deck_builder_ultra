@@ -1,6 +1,6 @@
-# Future Ideas & Phase 2+ Roadmap
+# Ripple99 — Future Ideas & Phase 2+ Roadmap
 
-This document tracks features, AI/recommendation upgrades, and cloud storage architectures intentionally deferred past V1 so the initial build stays lean, fast, and \$0 to host.
+**Build Decks, Not Piles.** This document tracks features, AI/recommendation upgrades, and cloud storage architectures for Ripple99 (`https://ripple99.pages.dev/`) intentionally deferred past V1 so the initial build stays lean, fast, and \$0 to host.
 
 ---
 
@@ -117,7 +117,7 @@ Refinements to make Firebase email/password account verification and password-re
 ### Post-Click Email Verification Experience (`continueUrl` & In-App Action Handler)
 * **Current limitation:** [`signUpWithEmail`](./src/cloud/firebaseProvider.ts#L715-L750) and [`resendVerificationEmail`](./src/cloud/firebaseProvider.ts#L785-L799) (and [`sendPasswordReset`](./src/cloud/firebaseProvider.ts#L818-L829)) call Firebase Auth email functions without `ActionCodeSettings`. Clicking the verification link opens Firebase's generic `*.firebaseapp.com/__/auth/action` screen with no return button, requiring users to switch tabs and manually click `"I've Verified My Email"` in [`AuthModal.tsx`](./src/components/AuthModal.tsx#L408-L416).
 * **Progressive \$0 improvements:**
-  * **Phase 1 — `ActionCodeSettings` Return Link (`continueUrl`):** Pass `{ url: window.location.origin }` (on an Authorized Domain from [`CLOUD_SETUP.md`](./CLOUD_SETUP.md#L67-L78)) through `FirebaseAuthOps` in [`firebaseProvider.ts`](./src/cloud/firebaseProvider.ts#L126-L197) so Firebase's hosted confirmation screen displays a **Continue** button returning the user straight to the app (and optionally auto-refresh auth verification state when returning with a query flag or on window focus).
+  * **Phase 1 — `ActionCodeSettings` Return Link (`continueUrl`):** Pass `{ url: window.location.origin }` (on an Authorized Domain from [`CLOUD_SETUP.md`](./CLOUD_SETUP.md#L77-L88)) through `FirebaseAuthOps` in [`firebaseProvider.ts`](./src/cloud/firebaseProvider.ts#L126-L197) so Firebase's hosted confirmation screen displays a **Continue** button returning the user straight to the app (and optionally auto-refresh auth verification state when returning with a query flag or on window focus).
   * **Phase 2 — In-App Custom Email Action Handler:** Parse `?mode=verifyEmail&oobCode=...` (and `resetPassword`) on mount in [`App.tsx`](./src/App.tsx#L311-L325), apply the code client-side via `applyActionCode()` (or `verifyPasswordResetCode()` / `confirmPasswordReset()`), immediately call `reloadUser()` so `email_verified` updates and cloud sync unlocks automatically, and point Firebase's template **Action URL** (once unlocked via Support) to the Cloudflare Pages app URL so both the email link and confirmation screen match the app's UI.
 
 ---
