@@ -98,6 +98,7 @@ export interface SyncStatusPayload {
 export type WorkerRequestMessage =
   | { type: 'INIT'; baseUrl?: string }
   | { type: 'SEARCH'; requestId: number; filter: SearchFilter }
+  | { type: 'ONEOFF_SEARCH'; requestId: number; filter: SearchFilter }
   | { type: 'GET_BY_IDS'; requestId: number; ids: string[] }
   | { type: 'RESOLVE_CARDS'; requestId: number; ids?: string[]; names?: string[] }
   | { type: 'FORCE_RESYNC'; baseUrl?: string };
@@ -105,6 +106,7 @@ export type WorkerRequestMessage =
 export type WorkerResponseMessage =
   | { type: 'SYNC_STATUS'; payload: SyncStatusPayload }
   | { type: 'SEARCH_RESULT'; payload: SearchResponsePayload }
+  | { type: 'ONEOFF_SEARCH_RESULT'; payload: SearchResponsePayload }
   | { type: 'CARDS_BY_IDS_RESULT'; requestId: number; cards: CompactCard[] }
   | {
       type: 'RESOLVE_CARDS_RESULT';

@@ -24,6 +24,25 @@ export interface UseCardSearchReturn {
   resetFilters: () => void;
   forceResync: () => void;
   resolveCards: (req: { ids?: string[]; names?: string[] }) => Promise<ResolvedCardsMap>;
+  runOneOffSearch: (filter: SearchFilter) => Promise<SearchResponsePayload>;
+}
+
+/**
+ * Builds an empty SearchResponsePayload fallback when the search worker errors or unmounts.
+ */
+export function buildEmptySearchResponse(
+  requestId: number,
+  filter: SearchFilter,
+): SearchResponsePayload {
+  return {
+    requestId,
+    matches: [],
+    totalMatches: 0,
+    page: Math.max(1, filter.page),
+    pageSize: Math.max(1, filter.pageSize),
+    totalPages: 1,
+    executionTimeMs: 0,
+  };
 }
 
 const INITIAL_SYNC_STATUS: SyncStatusPayload = {
@@ -44,6 +63,9 @@ export function useCardSearch(): UseCardSearchReturn {
   const latestAppliedIdRef = useRef<number>(-1);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingResolvesRef = useRef<Map<number, (res: ResolvedCardsMap) => void>>(new Map());
+  const pendingOneOffResolvesRef = useRef<
+    Map<number, { filter: SearchFilter; resolve: (res: SearchResponsePayload) => void }>
+  >(new Map());
 
   const dispatchSearch = useCallback((nextFilter: SearchFilter) => {
     const worker = workerRef.current;
@@ -65,6 +87,18 @@ export function useCardSearch(): UseCardSearchReturn {
     });
     workerRef.current = worker;
 
+    const flushPendingWithEmpty = () => {
+      for (const resolver of pendingResolvesRef.current.values()) {
+        resolver({ byId: {}, byName: {} });
+      }
+      pendingResolvesRef.current.clear();
+
+      for (const [reqId, pending] of pendingOneOffResolvesRef.current.entries()) {
+        pending.resolve(buildEmptySearchResponse(reqId, pending.filter));
+      }
+      pendingOneOffResolvesRef.current.clear();
+    };
+
     worker.onmessage = (event: MessageEvent<WorkerResponseMessage>) => {
       const msg = event.data;
       if (msg.type === 'SYNC_STATUS') {
@@ -74,6 +108,12 @@ export function useCardSearch(): UseCardSearchReturn {
           latestAppliedIdRef.current = msg.payload.requestId;
           setSearchResult(msg.payload);
           setIsSearching(false);
+        }
+      } else if (msg.type === 'ONEOFF_SEARCH_RESULT') {
+        const pending = pendingOneOffResolvesRef.current.get(msg.payload.requestId);
+        if (pending) {
+          pendingOneOffResolvesRef.current.delete(msg.payload.requestId);
+          pending.resolve(msg.payload);
         }
       } else if (msg.type === 'RESOLVE_CARDS_RESULT') {
         if (Object.keys(msg.basicLands).length > 0) {
@@ -95,10 +135,7 @@ export function useCardSearch(): UseCardSearchReturn {
         error: err.message,
       });
       setIsSearching(false);
-      for (const resolver of pendingResolvesRef.current.values()) {
-        resolver({ byId: {}, byName: {} });
-      }
-      pendingResolvesRef.current.clear();
+      flushPendingWithEmpty();
     };
 
     const initMsg: WorkerRequestMessage = { type: 'INIT' };
@@ -108,10 +145,7 @@ export function useCardSearch(): UseCardSearchReturn {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
-      for (const resolver of pendingResolvesRef.current.values()) {
-        resolver({ byId: {}, byName: {} });
-      }
-      pendingResolvesRef.current.clear();
+      flushPendingWithEmpty();
       worker.terminate();
       workerRef.current = null;
     };
@@ -191,6 +225,28 @@ export function useCardSearch(): UseCardSearchReturn {
     [],
   );
 
+  const runOneOffSearch = useCallback(
+    (oneOffFilter: SearchFilter): Promise<SearchResponsePayload> => {
+      const worker = workerRef.current;
+      const reqId = ++requestIdRef.current;
+      if (!worker) {
+        return Promise.resolve(buildEmptySearchResponse(reqId, oneOffFilter));
+      }
+      return new Promise<SearchResponsePayload>((resolve) => {
+        pendingOneOffResolvesRef.current.set(reqId, {
+          filter: oneOffFilter,
+          resolve,
+        });
+        worker.postMessage({
+          type: 'ONEOFF_SEARCH',
+          requestId: reqId,
+          filter: oneOffFilter,
+        } satisfies WorkerRequestMessage);
+      });
+    },
+    [],
+  );
+
   return {
     syncStatus,
     filter,
@@ -201,5 +257,6 @@ export function useCardSearch(): UseCardSearchReturn {
     resetFilters,
     forceResync,
     resolveCards,
+    runOneOffSearch,
   };
 }
