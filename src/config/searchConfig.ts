@@ -151,6 +151,8 @@ export const THEME_METADATA: readonly ThemeMetadata[] = [
   { id: 'spellslinger', label: 'Spellslinger', category: 'Spells' },
   { id: 'magecraft', label: 'Magecraft', category: 'Spells', isSubRole: true },
   { id: 'cantrip', label: 'Cantrip', category: 'Spells', isSubRole: true },
+  { id: 'spell-copy', label: 'Spell Copy / Storm', category: 'Spells', isSubRole: true },
+  { id: 'exile-cast', label: 'Cast from Exile', category: 'Spells' },
   { id: 'burn', label: 'Burn / Drain', category: 'Spells' },
 
   { id: 'blink', label: 'Blink / Flicker', category: 'ETB & Blink' },
@@ -173,6 +175,8 @@ export const THEME_METADATA: readonly ThemeMetadata[] = [
     category: 'Combat',
     isSubRole: true,
   },
+  { id: 'tap-untap', label: 'Tap / Untap', category: 'Combat', isSubRole: true },
+  { id: 'power-matters', label: 'Power Matters', category: 'Combat' },
 
   { id: 'lifegain', label: 'Lifegain', category: 'Resources & Control' },
   { id: 'lifegain-payoff', label: 'Lifegain Payoff', category: 'Resources & Control', isSubRole: true },
@@ -180,6 +184,8 @@ export const THEME_METADATA: readonly ThemeMetadata[] = [
   { id: 'lands-matter', label: 'Lands Matter', category: 'Resources & Control', isSubRole: true },
   { id: 'wheels', label: 'Wheels', category: 'Resources & Control' },
   { id: 'draw-payoff', label: 'Draw Payoff', category: 'Resources & Control', isSubRole: true },
+  { id: 'topdeck', label: 'Topdeck Matters', category: 'Resources & Control' },
+  { id: 'big-mana', label: 'Big Mana / X-Spells', category: 'Resources & Control' },
   { id: 'stax', label: 'Stax / Tax', category: 'Resources & Control' },
   { id: 'clone', label: 'Clones / Copies', category: 'Resources & Control' },
   { id: 'theft', label: 'Theft / Steal', category: 'Resources & Control' },
@@ -247,17 +253,14 @@ export const THEME_SYNONYMS: Readonly<Record<string, ThemeSynonymEntry>> = {
   graveyard: {
     primaryThemes: ['graveyard'],
     secondaryThemes: ['reanimator', 'mill', 'discard'],
-    roles: ['recursion'],
   },
   reanimator: {
     primaryThemes: ['reanimator', 'graveyard'],
     secondaryThemes: ['mill', 'discard'],
-    roles: ['recursion'],
   },
   reanimate: {
     primaryThemes: ['reanimator'],
     secondaryThemes: ['graveyard'],
-    roles: ['recursion'],
   },
   mill: {
     primaryThemes: ['mill'],
@@ -266,7 +269,6 @@ export const THEME_SYNONYMS: Readonly<Record<string, ThemeSynonymEntry>> = {
   selfmill: {
     primaryThemes: ['mill', 'graveyard'],
     secondaryThemes: ['reanimator'],
-    roles: ['recursion'],
   },
   discard: {
     primaryThemes: ['discard'],
@@ -274,15 +276,15 @@ export const THEME_SYNONYMS: Readonly<Record<string, ThemeSynonymEntry>> = {
   },
   spellslinger: {
     primaryThemes: ['spellslinger', 'magecraft'],
-    secondaryThemes: ['cantrip', 'burn'],
+    secondaryThemes: ['cantrip', 'burn', 'spell-copy'],
   },
   storm: {
-    primaryThemes: ['spellslinger', 'magecraft'],
+    primaryThemes: ['spellslinger', 'magecraft', 'spell-copy'],
     secondaryThemes: ['cantrip', 'treasure'],
-    roles: ['ramp'],
   },
   magecraft: {
     primaryThemes: ['magecraft', 'spellslinger'],
+    secondaryThemes: ['spell-copy'],
   },
   cantrip: {
     primaryThemes: ['cantrip'],
@@ -291,6 +293,35 @@ export const THEME_SYNONYMS: Readonly<Record<string, ThemeSynonymEntry>> = {
   cantrips: {
     primaryThemes: ['cantrip'],
     secondaryThemes: ['spellslinger'],
+  },
+  'spell-copy': {
+    primaryThemes: ['spell-copy'],
+    secondaryThemes: ['spellslinger', 'magecraft'],
+  },
+  fork: {
+    primaryThemes: ['spell-copy'],
+    secondaryThemes: ['spellslinger', 'magecraft'],
+  },
+  exile: {
+    primaryThemes: ['exile-cast'],
+  },
+  'exile-cast': {
+    primaryThemes: ['exile-cast'],
+  },
+  impulse: {
+    primaryThemes: ['exile-cast'],
+  },
+  cascade: {
+    primaryThemes: ['exile-cast'],
+  },
+  discover: {
+    primaryThemes: ['exile-cast'],
+  },
+  foretell: {
+    primaryThemes: ['exile-cast'],
+  },
+  plot: {
+    primaryThemes: ['exile-cast'],
   },
   blink: {
     primaryThemes: ['blink'],
@@ -311,7 +342,6 @@ export const THEME_SYNONYMS: Readonly<Record<string, ThemeSynonymEntry>> = {
   enchantress: {
     primaryThemes: ['enchantress'],
     secondaryThemes: ['auras'],
-    roles: ['draw'],
   },
   enchantments: {
     primaryThemes: ['enchantress', 'auras'],
@@ -334,12 +364,10 @@ export const THEME_SYNONYMS: Readonly<Record<string, ThemeSynonymEntry>> = {
   treasure: {
     primaryThemes: ['treasure'],
     secondaryThemes: ['artifacts', 'token-generator'],
-    roles: ['ramp'],
   },
   treasures: {
     primaryThemes: ['treasure'],
     secondaryThemes: ['artifacts', 'token-generator'],
-    roles: ['ramp'],
   },
   equipment: {
     primaryThemes: ['equipment', 'voltron'],
@@ -348,7 +376,6 @@ export const THEME_SYNONYMS: Readonly<Record<string, ThemeSynonymEntry>> = {
   voltron: {
     primaryThemes: ['voltron'],
     secondaryThemes: ['equipment', 'auras'],
-    roles: ['protection'],
   },
   vehicles: {
     primaryThemes: ['vehicles'],
@@ -362,21 +389,53 @@ export const THEME_SYNONYMS: Readonly<Record<string, ThemeSynonymEntry>> = {
   },
   landfall: {
     primaryThemes: ['landfall', 'lands-matter'],
-    roles: ['ramp'],
   },
   lands: {
     primaryThemes: ['lands-matter', 'landfall'],
-    roles: ['ramp'],
+  },
+  tap: {
+    primaryThemes: ['tap-untap'],
+  },
+  untap: {
+    primaryThemes: ['tap-untap'],
+  },
+  'tap-untap': {
+    primaryThemes: ['tap-untap'],
+  },
+  power: {
+    primaryThemes: ['power-matters'],
+  },
+  ferocious: {
+    primaryThemes: ['power-matters'],
+  },
+  'power-matters': {
+    primaryThemes: ['power-matters'],
+  },
+  topdeck: {
+    primaryThemes: ['topdeck'],
+  },
+  scry: {
+    primaryThemes: ['topdeck'],
+  },
+  'big-mana': {
+    primaryThemes: ['big-mana'],
+  },
+  'x-spell': {
+    primaryThemes: ['big-mana'],
+  },
+  'x-spells': {
+    primaryThemes: ['big-mana'],
+  },
+  'cost-reduction': {
+    primaryThemes: ['big-mana'],
   },
   wheels: {
     primaryThemes: ['wheels', 'draw-payoff'],
     secondaryThemes: ['discard'],
-    roles: ['draw'],
   },
   wheel: {
     primaryThemes: ['wheels', 'draw-payoff'],
     secondaryThemes: ['discard'],
-    roles: ['draw'],
   },
   stax: {
     primaryThemes: ['stax'],
@@ -397,7 +456,7 @@ export const THEME_SYNONYMS: Readonly<Record<string, ThemeSynonymEntry>> = {
     primaryThemes: ['clone'],
   },
   copy: {
-    primaryThemes: ['clone'],
+    primaryThemes: ['clone', 'spell-copy'],
     secondaryThemes: ['spellslinger'],
   },
   theft: {
@@ -440,17 +499,61 @@ export const THEME_SYNONYMS: Readonly<Record<string, ThemeSynonymEntry>> = {
   },
 };
 
-export const PRESET_THEME_CHIPS: readonly { label: string; themeQuery: string }[] = [
-  { label: 'Aristocrats Sacrifice', themeQuery: 'aristocrats sacrifice tokens' },
-  { label: '+1/+1 Counters', themeQuery: 'counters proliferate' },
-  { label: 'Blink & ETB', themeQuery: 'blink etb panharmonicon' },
-  { label: 'Spellslinger', themeQuery: 'spellslinger magecraft cantrips' },
-  { label: 'Landfall', themeQuery: 'landfall lands ramp' },
-  { label: 'Reanimator', themeQuery: 'reanimator graveyard mill' },
-  { label: 'Lifegain', themeQuery: 'lifegain' },
-  { label: 'Enchantress', themeQuery: 'enchantress auras' },
-  { label: 'Treasures & Artifacts', themeQuery: 'treasures artifacts' },
-  { label: 'Stax & Tax', themeQuery: 'stax' },
+export const PRESET_THEME_CHIPS: readonly {
+  label: string;
+  themeQuery: string;
+  themes: readonly string[];
+}[] = [
+  {
+    label: 'Aristocrats Sacrifice',
+    themeQuery: 'aristocrats sacrifice tokens',
+    themes: ['aristocrats', 'sacrifice', 'tokens'],
+  },
+  {
+    label: '+1/+1 Counters',
+    themeQuery: 'counters proliferate',
+    themes: ['plus-one-counters', 'proliferate'],
+  },
+  {
+    label: 'Blink & ETB',
+    themeQuery: 'blink etb panharmonicon',
+    themes: ['blink', 'etb-trigger', 'panharmonicon'],
+  },
+  {
+    label: 'Spellslinger',
+    themeQuery: 'spellslinger magecraft cantrips',
+    themes: ['spellslinger', 'magecraft', 'cantrip'],
+  },
+  {
+    label: 'Landfall',
+    themeQuery: 'landfall lands',
+    themes: ['landfall', 'lands-matter'],
+  },
+  {
+    label: 'Reanimator',
+    themeQuery: 'reanimator graveyard mill',
+    themes: ['reanimator', 'graveyard', 'mill'],
+  },
+  {
+    label: 'Lifegain',
+    themeQuery: 'lifegain',
+    themes: ['lifegain', 'lifegain-payoff'],
+  },
+  {
+    label: 'Enchantress',
+    themeQuery: 'enchantress auras',
+    themes: ['enchantress', 'auras'],
+  },
+  {
+    label: 'Treasures & Artifacts',
+    themeQuery: 'treasures artifacts',
+    themes: ['treasure', 'artifacts'],
+  },
+  {
+    label: 'Stax & Tax',
+    themeQuery: 'stax',
+    themes: ['stax'],
+  },
 ] as const;
 
 export const POPULAR_SUBTYPES: readonly string[] = [

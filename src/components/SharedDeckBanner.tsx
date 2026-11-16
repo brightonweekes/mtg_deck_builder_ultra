@@ -8,7 +8,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useId } from 'react';
-import { THEME_BY_ID } from '../config/searchConfig.js';
+import { formatRippleThemeLabel } from '../search/rippleEngine.js';
 import type { CompactCard } from '../types/card.js';
 import type { CloudDeckRecord, DeckVisibility } from '../types/cloud.js';
 import { ColorIdentityBadges } from './ManaSymbol.js';
@@ -191,12 +191,12 @@ export function SharedDeckBanner({
                 )}
               </div>
 
-              {/* Method A Synergy Themes */}
+              {/* Ripple Themes */}
               {sharedDeck.synergyThemes.length > 0 && (
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-1.5 text-[11px] font-semibold text-violet-200">
                     <Sparkles className="h-3.5 w-3.5 text-violet-300" />
-                    <span>Synergy Themes</span>
+                    <span>Ripple Themes</span>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {sharedDeck.synergyThemes.map((themeId) => (
@@ -204,7 +204,7 @@ export function SharedDeckBanner({
                         key={themeId}
                         className="rounded-lg border border-violet-500/35 bg-violet-500/15 px-2 py-0.5 text-[11px] font-medium text-violet-200"
                       >
-                        {THEME_BY_ID[themeId]?.label ?? themeId}
+                        {formatRippleThemeLabel(themeId)}
                       </span>
                     ))}
                   </div>

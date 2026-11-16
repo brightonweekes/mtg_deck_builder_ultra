@@ -432,7 +432,7 @@ export function DeckWorkspace({
         </div>
       </section>
 
-      {/* Collapsible Deck Primer & Synergy Notes */}
+      {/* Collapsible Deck Primer & Notes */}
       {onChangeDescription && (
         <section className="rounded-2xl border border-slate-800 bg-slate-900/60">
           <button
@@ -443,7 +443,7 @@ export function DeckWorkspace({
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <FileText className="h-3.5 w-3.5 shrink-0 text-amber-400" />
               <span className="font-semibold text-slate-200">
-                Deck Primer &amp; Synergy Notes
+                Deck Primer &amp; Notes
               </span>
               {!showPrimerNotes && currentDescription.trim() && (
                 <span className="truncate text-slate-400">
@@ -479,7 +479,7 @@ export function DeckWorkspace({
           {showPrimerNotes && (
             <div className="border-t border-slate-800/80 px-4 py-3">
               <textarea
-                aria-label="Deck Primer & Synergy Notes"
+                aria-label="Deck Primer & Notes"
                 rows={3}
                 maxLength={MAX_DECK_DESC_LEN}
                 value={currentDescription}
@@ -554,7 +554,7 @@ export function DeckWorkspace({
                     className="inline-flex items-center gap-1 rounded-lg bg-violet-500/20 px-2.5 py-1 text-xs font-semibold text-violet-200 ring-1 ring-violet-400/40 hover:bg-violet-500/30"
                   >
                     <Sparkles className="h-3.5 w-3.5" />
-                    Match Synergy
+                    Match Ripple
                   </button>
 
                   {canPair && (
@@ -888,7 +888,7 @@ export function DeckWorkspace({
               Mainboard ({analytics.mainboardCount} / {deck.commanders.length > 0 ? 100 - deck.commanders.length : 99})
             </h2>
             <p className="text-xs text-slate-400">
-              Click a card to inspect full rules text & synergy tags, or stash cuts in Maybeboard.
+              Click a card to inspect full rules text &amp; Ripple tags, or stash cuts in Maybeboard.
             </p>
           </div>
 

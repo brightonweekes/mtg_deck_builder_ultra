@@ -17,8 +17,8 @@ import type {
   SearchResponsePayload,
 } from '../types/search.js';
 import {
+  buildMergedRippleProfile,
   buildRippleIndex,
-  extractRippleProfile,
   prepareRippleMatcher,
   scoreRippleCard,
   type RippleIndex,
@@ -203,7 +203,7 @@ function prepareThemeMatcher(intent: ParsedThemeIntent | null): PreparedThemeMat
   const secondaryEnc = encodeThemesMask(intent.secondaryThemes);
   const themeChecks = [
     ...buildThemeChecks(intent.primaryThemes, 'Theme', 30),
-    ...buildThemeChecks(intent.secondaryThemes, 'Synergy', 20),
+    ...buildThemeChecks(intent.secondaryThemes, 'Ripple', 20),
   ];
   const roleChecks: RoleTermCheck[] = intent.targetRoles.map((r) => ({
     mask: ROLE_BIT[r] ?? 0,
@@ -760,7 +760,12 @@ export class CardSearchEngine {
    */
   ensureRippleIndex(): RippleIndex {
     if (this.rippleIndex) return this.rippleIndex;
-    this.rippleIndex = buildRippleIndex(this.cards, this.typeLineLowers, this.oracleLowers);
+    this.rippleIndex = buildRippleIndex(
+      this.cards,
+      this.typeLineLowers,
+      this.oracleLowers,
+      this.subtypesLowers,
+    );
     return this.rippleIndex;
   }
 
@@ -889,9 +894,6 @@ export class CardSearchEngine {
     const wantedRoleMask =
       filter.roles.length > 0 ? encodeRolesMask(filter.roles) : 0;
 
-    const wantedThemesEncoded =
-      filter.themes.length > 0 ? encodeThemesMask(filter.themes) : null;
-
     const wantedSubtypes =
       filter.subtypes.length > 0
         ? filter.subtypes.map((s) => s.trim().toLowerCase()).filter(Boolean)
@@ -899,8 +901,9 @@ export class CardSearchEngine {
 
     const queryTokens = filter.query ? parseSearchQuery(filter.query) : [];
     const hasThemeQuery = filter.themeQuery.trim().length > 0;
+    const hasSelectedThemes = filter.themes.length > 0;
     const themeIntent =
-      hasThemeQuery || filter.themes.length > 0
+      hasThemeQuery || hasSelectedThemes
         ? parseThemeIntent(filter.themeQuery, filter.themes)
         : null;
     const themeMatcher = prepareThemeMatcher(themeIntent);
@@ -908,19 +911,25 @@ export class CardSearchEngine {
     let rippleIdx: RippleIndex | null = null;
     let rippleMatcher: RippleMatcher | null = null;
     const rippleSeedIds = filter.rippleSeedIds ?? [];
-    if (rippleSeedIds.length > 0) {
-      const seedCards = this.getCardsByIds(rippleSeedIds);
-      if (seedCards.length > 0) {
-        rippleIdx = this.ensureRippleIndex();
-        const rippleProfile = extractRippleProfile(seedCards);
-        rippleMatcher = prepareRippleMatcher(
-          rippleProfile,
-          filter.rippleMode ?? 'all',
-          filter.rippleHookKey ?? null,
-          filter.maxPriceUsd,
-        );
-      }
+    const seedCards = rippleSeedIds.length > 0 ? this.getCardsByIds(rippleSeedIds) : [];
+    const rippleProfile = buildMergedRippleProfile(
+      seedCards,
+      filter.themes,
+      filter.themeQuery,
+    );
+    if (rippleProfile !== null) {
+      rippleIdx = this.ensureRippleIndex();
+      rippleMatcher = prepareRippleMatcher(
+        rippleProfile,
+        filter.rippleMode ?? 'all',
+        filter.rippleHookKey ?? null,
+        filter.maxPriceUsd,
+      );
     }
+
+    const rippleMode = filter.rippleMode ?? 'all';
+    const allowThemeOnlyFallback =
+      seedCards.length === 0 && rippleMode === 'all' && !filter.rippleHookKey;
 
     const excludeSet =
       filter.excludeCardIds && filter.excludeCardIds.length > 0
@@ -933,7 +942,7 @@ export class CardSearchEngine {
         : [];
     const useSynergySort =
       filter.sortBy === 'synergy' ||
-      ((hasThemeQuery || rippleMatcher !== null) && filter.sortBy === 'edhrec');
+      ((hasThemeQuery || hasSelectedThemes || rippleMatcher !== null) && filter.sortBy === 'edhrec');
 
     const matchIndices = this.matchIndices;
     const cardScores = this.cardScores;
@@ -1013,7 +1022,7 @@ export class CardSearchEngine {
 
       if (wantedTypeMask !== 0 && (typeMasks[i]! & wantedTypeMask) === 0) continue;
 
-      // 2. Role & explicit Theme pill filters (AND semantics via bitmasks)
+      // 2. Role filter (AND semantics via bitmasks)
       const roleMask = roleMasks[i]!;
       if (wantedRoleMask !== 0 && (roleMask & wantedRoleMask) !== wantedRoleMask) {
         continue;
@@ -1022,25 +1031,6 @@ export class CardSearchEngine {
       const themeMaskLo = themeMaskLos[i]!;
       const themeMaskHi = themeMaskHis[i]!;
       const cardExtraThemes = extraThemesByIndex !== null ? (extraThemesByIndex.get(i) ?? null) : null;
-
-      if (wantedThemesEncoded !== null) {
-        if (
-          (themeMaskLo & wantedThemesEncoded.lo) !== wantedThemesEncoded.lo ||
-          (themeMaskHi & wantedThemesEncoded.hi) !== wantedThemesEncoded.hi
-        ) {
-          continue;
-        }
-        if (wantedThemesEncoded.extra !== null) {
-          let allExtra = true;
-          for (const t of wantedThemesEncoded.extra) {
-            if (!cardExtraThemes || !cardExtraThemes.includes(t)) {
-              allExtra = false;
-              break;
-            }
-          }
-          if (!allExtra) continue;
-        }
-      }
 
       // 3. Subtype filter (OR semantics across selected subtypes)
       if (wantedSubtypes.length > 0) {
@@ -1074,8 +1064,9 @@ export class CardSearchEngine {
         if (!allTokensMatch) continue;
       }
 
-      // 5. Directional Ripple Chain + Method A Theme Scoring (reasons deferred to visible page)
+      // 5. Unified Ripple Chain + Theme Scoring (reasons deferred to visible page)
       let synergyScore = 0;
+      let rippleScore = 0;
 
       if (rippleMatcher !== null && rippleIdx !== null) {
         const rippleHit = scoreRippleCard(
@@ -1086,8 +1077,9 @@ export class CardSearchEngine {
           rippleMatcher,
           false,
         );
-        if (rippleHit.score <= 0) continue;
-        synergyScore += rippleHit.score;
+        rippleScore = rippleHit.score;
+        if (rippleScore <= 0 && !allowThemeOnlyFallback) continue;
+        synergyScore += rippleScore;
       }
 
       if (themeMatcher !== null) {
@@ -1097,9 +1089,7 @@ export class CardSearchEngine {
           (roleMask & themeMatcher.anyRoleMask) !== 0;
 
         let themeScore = 0;
-        if (!fastBitHit && !themeMatcher.hasAnyExtra && !themeMatcher.hasFallback) {
-          if (hasThemeQuery) continue;
-        } else {
+        if (fastBitHit || themeMatcher.hasAnyExtra || themeMatcher.hasFallback) {
           for (let t = 0; t < themeMatcher.themeChecks.length; t++) {
             const check = themeMatcher.themeChecks[t]!;
             if (matchesThemeCheck(themeMaskLo, themeMaskHi, cardExtraThemes, check)) {
@@ -1122,8 +1112,6 @@ export class CardSearchEngine {
               themeScore += 18;
             }
           }
-
-          if (hasThemeQuery && themeScore === 0) continue;
 
           if (themeScore > 0) {
             if (themeMatcher.groupChecks.length > 1) {
@@ -1164,6 +1152,8 @@ export class CardSearchEngine {
           }
         }
       }
+
+      if ((hasThemeQuery || hasSelectedThemes) && synergyScore <= 0) continue;
 
       const hasSynergyScoring = themeMatcher !== null || rippleMatcher !== null;
       matchIndices[matchCount] = i;

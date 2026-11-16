@@ -173,7 +173,7 @@ export function QuickStartBanner({
                   type="button"
                   disabled={loadingCommanderName !== null}
                   onClick={() => void handlePickSample(cmd.name)}
-                  title={`Load ${cmd.name} (${cmd.archetype}) and match synergy`}
+                  title={`Load ${cmd.name} (${cmd.archetype}) and match Ripple`}
                   className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700/80 bg-slate-950/80 px-2.5 py-1 text-[11px] font-medium text-slate-200 transition hover:border-violet-400/60 hover:bg-violet-500/15 hover:text-white disabled:opacity-50"
                 >
                   <ColorIdentityBadges colors={cmd.colors} size="xs" />

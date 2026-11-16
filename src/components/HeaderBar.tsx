@@ -190,10 +190,10 @@ export function HeaderBar({
               <button
                 type="button"
                 onClick={onMatchCommanderSynergy}
-                title="Explore Ripple Chains — Starters, Payoffs & Hidden Gems"
-                className="inline-flex items-center gap-1 rounded-md bg-cyan-500/20 px-2 py-0.5 text-[11px] font-medium text-cyan-100 ring-1 ring-cyan-400/40 transition hover:bg-cyan-500/30"
+                title="Explore Ripple — Starters, Payoffs & Hidden Gems"
+                className="inline-flex items-center gap-1 rounded-md bg-violet-500/20 px-2 py-0.5 text-[11px] font-medium text-violet-200 ring-1 ring-violet-400/40 transition hover:bg-violet-500/30"
               >
-                <Sparkles className="h-3 w-3 text-cyan-300" />
+                <Sparkles className="h-3 w-3 text-violet-300" />
                 <span className="hidden xl:inline">Ripple</span>
               </button>
 

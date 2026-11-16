@@ -260,7 +260,7 @@ export function QuickDeckDrawer({
                   className="inline-flex items-center gap-1 rounded-md bg-violet-500/20 px-2 py-1 text-[11px] font-semibold text-violet-200 ring-1 ring-violet-400/40 hover:bg-violet-500/30"
                 >
                   <Sparkles className="h-3 w-3" />
-                  Match Synergy
+                  Match Ripple
                 </button>
               )}
             </div>

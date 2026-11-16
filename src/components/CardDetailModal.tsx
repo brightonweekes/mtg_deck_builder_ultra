@@ -283,10 +283,10 @@ export function CardDetailModal({
                       onFindSimilar(card);
                       onClose();
                     }}
-                    title="Build a Ripple Chain around this card (Starters, Payoffs & Hidden Gems)"
-                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-cyan-100 transition hover:bg-cyan-500/25"
+                    title="Build a Ripple mix around this card (Starters, Payoffs & Hidden Gems)"
+                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-violet-500/40 bg-violet-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-violet-100 transition hover:bg-violet-500/25"
                   >
-                    <Sparkles className="h-3.5 w-3.5 text-cyan-300" />
+                    <Sparkles className="h-3.5 w-3.5 text-violet-300" />
                     Find Similar
                   </button>
                 )}
@@ -347,16 +347,16 @@ export function CardDetailModal({
               </div>
             )}
 
-            {/* Synergy Match Reasons */}
+            {/* Ripple Match Reasons */}
             {(synergyScore > 0 || matchedReasons.length > 0) && (
               <div className="rounded-xl border border-violet-500/30 bg-violet-950/25 p-3">
                 <div className="mb-1.5 flex items-center justify-between text-xs">
                   <span className="inline-flex items-center gap-1.5 font-semibold text-violet-200">
                     <Sparkles className="h-3.5 w-3.5" />
-                    Ripple &amp; Synergy Match
+                    Ripple Match
                   </span>
                   <span className="rounded bg-violet-500/30 px-2 py-0.5 font-mono text-[11px] font-bold text-violet-100">
-                    Score {synergyScore}
+                    Ripple {synergyScore}
                   </span>
                 </div>
                 {matchedReasons.length > 0 && (

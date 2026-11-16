@@ -195,7 +195,7 @@ export function CardTile({
             <div className="flex flex-wrap gap-1">
               {synergyScore > 0 && (
                 <span className="rounded bg-violet-500/25 px-1.5 py-0.5 text-[10px] font-bold text-violet-100 ring-1 ring-violet-400/40">
-                  Synergy {synergyScore}
+                  Ripple {synergyScore}
                 </span>
               )}
               {matchedReasons.slice(0, 3).map((r) => (
@@ -317,7 +317,7 @@ export function CardTile({
 
         {synergyScore > 0 && (
           <span className="absolute right-2 top-2 rounded-md bg-violet-950/90 px-1.5 py-0.5 text-[11px] font-bold text-violet-200 ring-1 ring-violet-400/40 backdrop-blur">
-            Score {synergyScore}
+            Ripple {synergyScore}
           </span>
         )}
 

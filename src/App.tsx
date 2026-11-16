@@ -39,6 +39,7 @@ import {
   getCompatiblePartnerFilter,
 } from './search/commanderRules.js';
 import {
+  buildMergedRippleProfile,
   computeDeckChainBalance,
   extractRippleProfile,
 } from './search/rippleEngine.js';
@@ -253,8 +254,8 @@ export function App() {
   }, [deck.commanders, filter.rippleSeedIds, rippleSeedCards]);
 
   const activeRippleProfile = useMemo(
-    () => (activeRippleSeeds.length > 0 ? extractRippleProfile(activeRippleSeeds) : null),
-    [activeRippleSeeds],
+    () => buildMergedRippleProfile(activeRippleSeeds, filter.themes, filter.themeQuery),
+    [activeRippleSeeds, filter.themes, filter.themeQuery],
   );
 
   const deckChainBalance = useMemo(
@@ -267,9 +268,9 @@ export function App() {
 
   useEffect(() => {
     if (!hideDeckCardsInRipple) return;
-    if ((filter.rippleSeedIds ?? []).length === 0) return;
+    if (!activeRippleProfile) return;
     updateFilter({ excludeCardIds: deckAllCardIds });
-  }, [deckAllCardIds, filter.rippleSeedIds, hideDeckCardsInRipple, updateFilter]);
+  }, [activeRippleProfile, deckAllCardIds, hideDeckCardsInRipple, updateFilter]);
 
   const cloudShareActive =
     Boolean(cloudAuth.user?.emailVerified) &&
@@ -573,6 +574,7 @@ export function App() {
       const nextIdentity = setCommander(card);
       if (nextIdentity === null) return;
 
+      const seedProfile = extractRippleProfile([card]);
       setRippleSeedCards([card]);
       updateFilter({
         colorIdentity: deck.lockSearchToCommanderIdentity ? nextIdentity : filter.colorIdentity,
@@ -581,6 +583,7 @@ export function App() {
         rippleSeedIds: [card.id],
         rippleMode: 'all',
         rippleHookKey: null,
+        themes: seedProfile.defaultThemes,
         themeQuery: '',
         sortBy: 'synergy',
       });
@@ -599,6 +602,7 @@ export function App() {
       if (nextIdentity === null) return;
 
       const nextSeeds = [...deck.commanders.filter((c) => c.id !== card.id), card];
+      const seedProfile = extractRippleProfile(nextSeeds);
       setRippleSeedCards(nextSeeds);
       updateFilter({
         colorIdentity: deck.lockSearchToCommanderIdentity ? nextIdentity : filter.colorIdentity,
@@ -608,6 +612,7 @@ export function App() {
         rippleSeedIds: nextSeeds.map((c) => c.id),
         rippleMode: 'all',
         rippleHookKey: null,
+        themes: seedProfile.defaultThemes,
         themeQuery: '',
         sortBy: 'synergy',
       });
@@ -628,11 +633,24 @@ export function App() {
       syncFilterIdentity(nextIdentity, remaining.length > 0);
       if ((filter.rippleSeedIds ?? []).length > 0) {
         setRippleSeedCards(remaining);
-        updateFilter({
-          rippleSeedIds: remaining.map((c) => c.id),
-          rippleHookKey: null,
-          ...(remaining.length === 0 ? { rippleMode: 'all', sortBy: 'edhrec' } : {}),
-        });
+        if (remaining.length === 0) {
+          setHideDeckCardsInRipple(false);
+          updateFilter({
+            rippleSeedIds: [],
+            rippleHookKey: null,
+            themes: [],
+            rippleMode: 'all',
+            excludeCardIds: [],
+            sortBy: 'edhrec',
+          });
+        } else {
+          const nextProfile = extractRippleProfile(remaining);
+          updateFilter({
+            rippleSeedIds: remaining.map((c) => c.id),
+            rippleHookKey: null,
+            themes: nextProfile.defaultThemes,
+          });
+        }
       }
     },
     [deck.commanders, filter.rippleSeedIds, removeCommander, syncFilterIdentity, updateFilter],
@@ -645,8 +663,11 @@ export function App() {
     syncFilterIdentity(null, false);
     if ((filter.rippleSeedIds ?? []).length > 0) {
       setRippleSeedCards([]);
+      setHideDeckCardsInRipple(false);
       updateFilter({
         rippleSeedIds: [],
+        themes: [],
+        themeQuery: '',
         rippleMode: 'all',
         rippleHookKey: null,
         excludeCardIds: [],
@@ -679,6 +700,8 @@ export function App() {
     setHideDeckCardsInRipple(false);
     updateFilter({
       rippleSeedIds: [],
+      themes: [],
+      themeQuery: '',
       rippleMode: 'all',
       rippleHookKey: null,
       excludeCardIds: [],
@@ -688,6 +711,7 @@ export function App() {
 
   const handleMatchCommanderSynergy = useCallback(() => {
     if (deck.commanders.length === 0) return;
+    const seedProfile = extractRippleProfile(deck.commanders);
     setRippleSeedCards(deck.commanders);
     updateFilter({
       rippleSeedIds: deck.commanders.map((c) => c.id),
@@ -695,7 +719,7 @@ export function App() {
       rippleHookKey: null,
       themeQuery: '',
       sortBy: 'synergy',
-      themes: [],
+      themes: seedProfile.defaultThemes,
       roles: [],
       commanderOnly: false,
       partnerType: null,
@@ -721,6 +745,7 @@ export function App() {
     updateFilter({
       ...patch,
       rippleSeedIds: [],
+      themes: [],
       rippleHookKey: null,
       colorIdentity: null,
     });
@@ -738,6 +763,7 @@ export function App() {
 
   const handleFindSimilar = useCallback(
     (card: CompactCard) => {
+      const seedProfile = extractRippleProfile([card]);
       setRippleSeedCards([card]);
       updateFilter({
         rippleSeedIds: [card.id],
@@ -745,7 +771,7 @@ export function App() {
         rippleHookKey: null,
         themeQuery: '',
         sortBy: 'synergy',
-        themes: [],
+        themes: seedProfile.defaultThemes,
         roles: [],
         commanderOnly: false,
         partnerType: null,
@@ -784,6 +810,7 @@ export function App() {
     (card: CompactCard) => {
       const nextIdentity = setCommander(card);
       if (nextIdentity === null) return;
+      const seedProfile = extractRippleProfile([card]);
       setRippleSeedCards([card]);
       updateFilter(
         {
@@ -792,7 +819,7 @@ export function App() {
           rippleHookKey: null,
           themeQuery: '',
           sortBy: 'synergy',
-          themes: [],
+          themes: seedProfile.defaultThemes,
           roles: [],
           commanderOnly: false,
           partnerType: null,
@@ -837,11 +864,34 @@ export function App() {
     [deckAllCardIds, updateFilter],
   );
 
+  const handleRemoveRippleTheme = useCallback(
+    (themeId: string) => {
+      const nextThemes = filter.themes.filter((t) => t !== themeId);
+      if (nextThemes.length === 0 && !filter.themeQuery.trim()) {
+        setRippleSeedCards([]);
+        setHideDeckCardsInRipple(false);
+        updateFilter({
+          themes: [],
+          rippleSeedIds: [],
+          rippleMode: 'all',
+          rippleHookKey: null,
+          excludeCardIds: [],
+          sortBy: 'edhrec',
+        });
+      } else {
+        updateFilter({ themes: nextThemes, rippleHookKey: null });
+      }
+    },
+    [filter.themeQuery, filter.themes, updateFilter],
+  );
+
   const handleClearRipple = useCallback(() => {
     setRippleSeedCards([]);
     setHideDeckCardsInRipple(false);
     updateFilter({
       rippleSeedIds: [],
+      themes: [],
+      themeQuery: '',
       rippleMode: 'all',
       rippleHookKey: null,
       excludeCardIds: [],
@@ -862,11 +912,14 @@ export function App() {
   const handleFilterByTheme = useCallback(
     (themeId: string) => {
       if (!filter.themes.includes(themeId)) {
-        updateFilter({ themes: [...filter.themes, themeId] });
+        updateFilter({
+          themes: [...filter.themes, themeId],
+          sortBy: filter.sortBy === 'edhrec' ? 'synergy' : filter.sortBy,
+        });
       }
       setActiveTab('search');
     },
-    [filter.themes, updateFilter],
+    [filter.sortBy, filter.themes, updateFilter],
   );
 
   const handleInspectRawCard = useCallback(
@@ -1122,12 +1175,14 @@ export function App() {
                 <RippleChainBar
                   profile={activeRippleProfile}
                   mode={filter.rippleMode ?? 'all'}
+                  activeThemes={filter.themes}
                   activeHookKey={filter.rippleHookKey ?? null}
                   hideDeckCards={hideDeckCardsInRipple}
                   deckCardCount={deckMainboardCards.length}
                   deckBalance={deckChainBalance}
                   onSelectMode={handleRippleModeChange}
                   onSelectHook={handleRippleHookChange}
+                  onRemoveTheme={handleRemoveRippleTheme}
                   onToggleHideDeckCards={handleToggleHideDeckCardsInRipple}
                   onClearRipple={handleClearRipple}
                 />

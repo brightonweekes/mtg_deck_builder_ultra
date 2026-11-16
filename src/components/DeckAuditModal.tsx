@@ -392,7 +392,7 @@ export function DeckAuditModal({
       .catch(() => {
         if (cancelled) return;
         setRawUpgradeMatches([]);
-        setUpgradeError('Could not load under-$1 synergy upgrades right now.');
+        setUpgradeError('Could not load under-$1 Ripple upgrades right now.');
       })
       .finally(() => {
         if (!cancelled) {
@@ -870,9 +870,9 @@ export function DeckAuditModal({
                 <div className="space-y-2.5 rounded-xl border border-slate-800 bg-slate-900/75 p-3.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
-                      <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+                      <Sparkles className="h-3.5 w-3.5 text-violet-400" />
                       <h4 className="font-bold uppercase tracking-wider text-slate-200">
-                        Top Under-$1 Synergy Upgrades
+                        Top Under-$1 Ripple Upgrades
                       </h4>
                       <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-emerald-300 ring-1 ring-emerald-500/30">
                         &le; $1.00
@@ -895,7 +895,7 @@ export function DeckAuditModal({
 
                   {!(rawUpgradeMatches && rawUpgradeMatches.length > 0) && !upgradeFilter ? (
                     <p className="rounded-lg border border-dashed border-slate-800 bg-slate-950/60 px-3 py-2.5 text-[11px] text-slate-400">
-                      Add a Commander or theme-tagged cards to unlock under-$1 synergy upgrades.
+                      Add a Commander or theme-tagged cards to unlock under-$1 Ripple upgrades.
                     </p>
                   ) : rawUpgradeMatches === null || isLoadingUpgrades ? (
                     <div className="grid gap-2 sm:grid-cols-2">
@@ -912,7 +912,7 @@ export function DeckAuditModal({
                     </p>
                   ) : upgradeMatches.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-slate-800 bg-slate-950/60 px-3 py-2.5 text-[11px] text-slate-400">
-                      No additional under-$1 synergy upgrades found outside your current list.
+                      No additional under-$1 Ripple upgrades found outside your current list.
                     </p>
                   ) : (
                     <div className="grid gap-2 sm:grid-cols-2">

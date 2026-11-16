@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { FileText, Grid2X2, LayoutGrid, X } from 'lucide-react';
-import { PARTNER_TYPE_LABELS, ROLE_BY_ID, THEME_BY_ID } from '../config/searchConfig.js';
-import { RIPPLE_MODE_META } from '../search/rippleEngine.js';
+import { PARTNER_TYPE_LABELS, ROLE_BY_ID } from '../config/searchConfig.js';
+import { formatRippleThemeLabel, RIPPLE_MODE_META } from '../search/rippleEngine.js';
 import type { ViewMode } from '../types/deck.js';
 import type { SearchFilter, SearchResponsePayload, SortOption } from '../types/search.js';
 import { ColorIdentityBadges, ManaSymbolBadge } from './ManaSymbol.js';
@@ -68,7 +68,7 @@ export function ActiveFilterBar({
   if (filter.themeQuery) {
     chips.push({
       key: 'themeQuery',
-      label: `Synergy: "${filter.themeQuery}"`,
+      label: `Ripple: "${filter.themeQuery}"`,
       onRemove: () => onUpdateFilter({ themeQuery: '' }),
     });
   }
@@ -125,7 +125,7 @@ export function ActiveFilterBar({
   for (const theme of filter.themes) {
     chips.push({
       key: `theme-${theme}`,
-      label: `Mechanic: ${THEME_BY_ID[theme]?.label ?? theme}`,
+      label: `Ripple: ${formatRippleThemeLabel(theme)}`,
       onRemove: () =>
         onUpdateFilter({ themes: filter.themes.filter((t) => t !== theme) }),
     });
@@ -212,8 +212,8 @@ export function ActiveFilterBar({
             onChange={(e) => onUpdateFilter({ sortBy: e.target.value as SortOption })}
             className="rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-1 text-xs text-slate-200 outline-none focus:border-amber-400"
           >
-            <option value="edhrec">Sort: EDHREC / Synergy</option>
-            <option value="synergy">Sort: Synergy Score</option>
+            <option value="edhrec">Sort: EDHREC / Ripple</option>
+            <option value="synergy">Sort: Ripple Score</option>
             <option value="cmc-asc">Sort: Mana Value Low → High</option>
             <option value="cmc-desc">Sort: Mana Value High → Low</option>
             <option value="price-asc">Sort: Price Low → High</option>

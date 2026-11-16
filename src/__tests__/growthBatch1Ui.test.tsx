@@ -584,7 +584,7 @@ describe('Ripple99 Growth Batch 1 UI & Helpers', () => {
       />,
     );
 
-    expect(html).toContain('Top Under-$1 Synergy Upgrades');
+    expect(html).toContain('Top Under-$1 Ripple Upgrades');
     expect(html).toContain('Opt');
     expect(html).toContain('$0.25');
     expect(html).toContain('Theme: Spellslinger');

@@ -9,13 +9,17 @@ import { FilterSidebar } from '../components/FilterSidebar.js';
 import { HeaderBar } from '../components/HeaderBar.js';
 import { RippleChainBar } from '../components/RippleChainBar.js';
 import {
+  buildMergedRippleProfile,
+  buildRippleIndex,
   computeDeckChainBalance,
   extractRippleProfile,
   getSynergyReasonBadgeClass,
   HIDDEN_GEM_DEFAULT_MAX_USD,
   HIDDEN_GEM_MAX_EDHREC_RANK,
   HIDDEN_GEM_MIN_EDHREC_RANK,
+  prepareRippleMatcher,
   RIPPLE_MODE_META,
+  scoreRippleCard,
 } from '../search/rippleEngine.js';
 import { CardSearchEngine } from '../search/searchEngine.js';
 import { hydrateCompactCard, type CompactCard, type SerializedCompactCard } from '../types/card.js';
@@ -282,17 +286,24 @@ describe('Phase 3 Ripple Chains Engine & UI', () => {
         profile={profile}
         mode="enablers"
         activeHookKey={null}
+        activeThemes={['death-trigger', 'tribe:Rat']}
         hideDeckCards={false}
         deckCardCount={7}
         deckBalance={{ inDeckStarters: 6, inDeckPayoffs: 0, recommendedMode: 'payoffs' }}
         onSelectMode={() => {}}
         onSelectHook={() => {}}
+        onRemoveTheme={() => {}}
         onToggleHideDeckCards={() => {}}
         onClearRipple={() => {}}
       />,
     );
-    expect(barHtml).toContain('Ripple Chains');
-    expect(barHtml).toContain('All Synergies');
+    expect(barHtml).toContain('>Ripple<');
+    expect(barHtml).toContain('All Ripple');
+    expect(barHtml).toContain('border-violet-500/35');
+    expect(barHtml).toContain('Active themes:');
+    expect(barHtml).toContain('Remove Death Trigger from Ripple');
+    expect(barHtml).toContain('Rat Typal');
+    expect(barHtml).not.toContain('Focus hook:');
     expect(barHtml).toContain('Starters');
     expect(barHtml).toContain('Payoffs');
     expect(barHtml).toContain('Hidden Gems');
@@ -325,6 +336,7 @@ describe('Phase 3 Ripple Chains Engine & UI', () => {
       />,
     );
     expect(headerHtml).toContain('>Ripple<');
+    expect(headerHtml).toContain('ring-violet-400/40');
 
     const sidebarHtml = renderToStaticMarkup(
       <FilterSidebar
@@ -337,7 +349,7 @@ describe('Phase 3 Ripple Chains Engine & UI', () => {
         onFindPartner={() => {}}
       />,
     );
-    expect(sidebarHtml).toContain('Mechanic &amp; Theme Filters');
+    expect(sidebarHtml).toContain('Ripple Themes &amp; Mechanics');
     expect(sidebarHtml).not.toContain('Method A Theme Matcher');
 
     const activeBarHtml = renderToStaticMarkup(
@@ -373,7 +385,9 @@ describe('Phase 3 Ripple Chains Engine & UI', () => {
       />,
     );
     expect(modalHtml).toContain('Find Similar');
-    expect(modalHtml).toContain('Ripple &amp; Synergy Match');
+    expect(modalHtml).toContain('Ripple Match');
+    expect(modalHtml).toContain('Ripple 88');
+    expect(modalHtml).toContain('violet');
 
     const tileHtml = renderToStaticMarkup(
       <CardTile
@@ -389,7 +403,94 @@ describe('Phase 3 Ripple Chains Engine & UI', () => {
         onAddPartner={() => {}}
       />,
     );
+    expect(tileHtml).toContain('Ripple 88');
+    expect(tileHtml).toContain('bg-violet-950/90');
     expect(tileHtml).toContain('Starter: Land Ramp');
     expect(tileHtml).toContain('cyan');
+  });
+
+  it('extracts selective core commander defaultThemes and supports score-based theme mixing/subtraction', () => {
+    const sythis = byName.get("Sythis, Harvest's Hand")!;
+    const sythisProfile = extractRippleProfile([sythis]);
+    expect(sythisProfile.defaultThemes).toContain('enchantress');
+    expect(sythisProfile.defaultThemes).toContain('lifegain');
+    expect(sythisProfile.defaultThemes).not.toContain('draw-payoff');
+
+    const index = buildRippleIndex(cards);
+    const cardIdx = new Map(cards.map((c, i) => [c.id, i]));
+    const scoreOf = (card: CompactCard, matcher: ReturnType<typeof prepareRippleMatcher>) =>
+      scoreRippleCard(cardIdx.get(card.id)!, card, card.typeLine.toLowerCase(), index, matcher, true);
+
+    const heliod = byName.get('Heliod, Sun-Crowned')!;
+    const archangel = byName.get('Archangel of Thune')!;
+    const scales = byName.get('Hardened Scales')!;
+
+    const mixedProfile = buildMergedRippleProfile([], ['lifegain', 'plus-one-counters'])!;
+    const mixedMatcher = prepareRippleMatcher(mixedProfile, 'all', null, null);
+    const heliodMix = scoreOf(heliod, mixedMatcher);
+    const archangelMix = scoreOf(archangel, mixedMatcher);
+    const scalesMix = scoreOf(scales, mixedMatcher);
+    expect(heliodMix.score).toBeGreaterThan(scalesMix.score);
+    expect(archangelMix.score).toBeGreaterThan(scalesMix.score);
+
+    const lifegainOnlyProfile = buildMergedRippleProfile([], ['lifegain'])!;
+    const lifegainOnlyMatcher = prepareRippleMatcher(lifegainOnlyProfile, 'all', null, null);
+    expect(scoreOf(scales, lifegainOnlyMatcher).score).toBe(0);
+    expect(scoreOf(heliod, lifegainOnlyMatcher).score).toBeGreaterThan(0);
+  });
+
+  it('matches whole-word tribal & custom keyword Ripple across all 4 modes without false substrings or generic rocks', () => {
+    const index = buildRippleIndex(cards);
+    const cardIdx = new Map(cards.map((c, i) => [c.id, i]));
+    const scoreOf = (card: CompactCard, matcher: ReturnType<typeof prepareRippleMatcher>) =>
+      scoreRippleCard(cardIdx.get(card.id)!, card, card.typeLine.toLowerCase(), index, matcher, true);
+
+    const ratAll = prepareRippleMatcher(buildMergedRippleProfile([], ['tribe:Rat'])!, 'all', null, null);
+    const pirate = cards.find(
+      (c) =>
+        c.typeLine.includes('Pirate') &&
+        !/\brat\b/i.test(c.oracleText) &&
+        !c.keywords.includes('Changeling'),
+    )!;
+    const proliferater = cards.find(
+      (c) =>
+        c.oracleText.toLowerCase().includes('proliferate') &&
+        !/\brat\b/i.test(c.oracleText) &&
+        !c.typeLine.includes('Rat') &&
+        !c.keywords.includes('Changeling'),
+    )!;
+    expect(scoreOf(pirate, ratAll).score).toBe(0);
+    expect(scoreOf(proliferater, ratAll).score).toBe(0);
+
+    const elfAll = prepareRippleMatcher(buildMergedRippleProfile([], ['tribe:Elf'])!, 'all', null, null);
+    const itselfCard = cards.find(
+      (c) =>
+        c.oracleText.toLowerCase().includes('itself') &&
+        !/\belf\b|\belves\b/i.test(c.oracleText) &&
+        !c.typeLine.includes('Elf') &&
+        !c.keywords.includes('Changeling'),
+    )!;
+    expect(scoreOf(itselfCard, elfAll).score).toBe(0);
+
+    const vehiclesAll = prepareRippleMatcher(buildMergedRippleProfile([], ['vehicles'])!, 'all', null, null);
+    const changeling = cards.find((c) => c.keywords.includes('Changeling') && !c.typeLine.includes('Vehicle'))!;
+    const copter = byName.get("Smuggler's Copter")!;
+    expect(scoreOf(changeling, vehiclesAll).score).toBe(0);
+    expect(scoreOf(copter, vehiclesAll).score).toBeGreaterThan(0);
+
+    const fynn = byName.get('Fynn, the Fangbearer')!;
+    const dtProfile = buildMergedRippleProfile([], ['custom:deathtouch'])!;
+    for (const mode of ['all', 'enablers', 'payoffs', 'hidden-gems'] as const) {
+      const m = prepareRippleMatcher(dtProfile, mode, null, null);
+      expect(scoreOf(fynn, m).score).toBeGreaterThan(0);
+    }
+
+    // False-positive exclusions on theme queries
+    const landfallMatch = prepareRippleMatcher(buildMergedRippleProfile([], ['landfall'])!, 'all', null, null);
+    expect(scoreOf(byName.get('Sol Ring')!, landfallMatch).score).toBe(0);
+    expect(scoreOf(byName.get('Arcane Signet')!, landfallMatch).score).toBe(0);
+
+    const enchantressMatch = prepareRippleMatcher(buildMergedRippleProfile([], ['enchantress'])!, 'all', null, null);
+    expect(scoreOf(byName.get('Harmonize')!, enchantressMatch).score).toBe(0);
   });
 });

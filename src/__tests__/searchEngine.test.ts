@@ -519,5 +519,39 @@ describe('CardSearchEngine against real 32,000+-card Commander catalog', () => {
     for (const m of pillRes.matches) {
       expect(m.matchedReasons).toContain('Theme: Treasures');
     }
+
+    // Unified Ripple search: mixing mechanics, whole-word tribes, and custom keywords within <25ms
+    const mixFilter = withFilter({ themes: ['lifegain', 'plus-one-counters'], pageSize: 60 });
+    const mixedRes = engine.search(mixFilter);
+    expect(measureMedianExecutionMs(engine, mixFilter)).toBeLessThan(MAX_QUERY_MS);
+    expect(mixedRes.totalMatches).toBeGreaterThan(0);
+    const mixedTopNames = new Set(mixedRes.matches.slice(0, 60).map((m) => m.card.name));
+    expect(
+      mixedTopNames.has('Heliod, Sun-Crowned') ||
+        mixedTopNames.has('Archangel of Thune') ||
+        mixedTopNames.has('Exemplar of Light'),
+    ).toBe(true);
+
+    const ratFilter = withFilter({ themes: ['tribe:Rat'], pageSize: 40 });
+    const ratRes = engine.search(ratFilter);
+    expect(measureMedianExecutionMs(engine, ratFilter)).toBeLessThan(MAX_QUERY_MS);
+    expect(ratRes.totalMatches).toBeGreaterThan(0);
+    const ratTopNames = new Set(ratRes.matches.map((m) => m.card.name));
+    expect(ratTopNames.has('Marrow-Gnawer') || ratTopNames.has('Pack Rat')).toBe(true);
+
+    const ratGemRes = engine.search(
+      withFilter({ themes: ['tribe:Rat'], rippleMode: 'hidden-gems', pageSize: 20 }),
+    );
+    expect(ratGemRes.totalMatches).toBeGreaterThan(0);
+    for (const m of ratGemRes.matches) {
+      expect(m.card.priceUsd).not.toBeNull();
+      expect(m.card.priceUsd!).toBeLessThanOrEqual(5);
+    }
+
+    const dtFilter = withFilter({ themes: ['custom:deathtouch'], pageSize: 40 });
+    const dtRes = engine.search(dtFilter);
+    expect(measureMedianExecutionMs(engine, dtFilter)).toBeLessThan(MAX_QUERY_MS);
+    expect(dtRes.totalMatches).toBeGreaterThan(0);
+    expect(new Set(dtRes.matches.map((m) => m.card.name)).has('Fynn, the Fangbearer')).toBe(true);
   });
 });
