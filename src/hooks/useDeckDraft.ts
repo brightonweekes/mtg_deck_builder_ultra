@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { isUntouchedStarterDeck } from '../cloud/syncEngine.js';
+import { ACTIVE_DECK_STORAGE_KEY, isUntouchedStarterDeck } from '../cloud/syncEngine.js';
 import { MAX_DECK_DESC_LEN } from '../cloud/validation.js';
 import { cardDb, type MtgCardDatabase, type SavedDeckRecord } from '../db/cardDb.js';
 import {
@@ -25,7 +25,7 @@ import type { DeckVisibility } from '../types/cloud.js';
 import type { DeckDraft } from '../types/deck.js';
 import { computeDeckSynergyThemes } from './useCloudSync.js';
 
-const STORAGE_KEY = 'mtg_ultra_active_deck_v1';
+const STORAGE_KEY = ACTIVE_DECK_STORAGE_KEY;
 
 export interface DeckActionNotice {
   message: string;

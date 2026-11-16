@@ -14,6 +14,7 @@ import {
   signInWithPopup as fbSignInWithPopup,
   signOut as fbSignOut,
   updateProfile as fbUpdateProfile,
+  type ActionCodeSettings,
   type Auth,
   type AuthCredential,
   type AuthProvider,
@@ -73,7 +74,7 @@ import {
   type HumanizedCloudError,
 } from './validation.js';
 
-export const PENDING_HANDLE_STORAGE_PREFIX = 'mtg_pending_handle_';
+export const PENDING_HANDLE_STORAGE_PREFIX = 'ripple99_pending_handle_';
 
 const MAX_FRIEND_CATALOG_DECKS = 200;
 const MAX_SYNERGY_THEMES = 20;
@@ -123,10 +124,14 @@ export interface FirebaseAuthOps {
   createGoogleAuthProvider: () => AuthProvider;
   createEmailCredential: (email: string, password: string) => AuthCredential;
   updateProfile: (user: User, profile: { displayName?: string | null }) => Promise<void>;
-  sendEmailVerification: (user: User) => Promise<void>;
+  sendEmailVerification: (user: User, actionCodeSettings?: ActionCodeSettings) => Promise<void>;
   reload: (user: User) => Promise<void>;
   getIdToken: (user: User, forceRefresh?: boolean) => Promise<string>;
-  sendPasswordResetEmail: (auth: Auth, email: string) => Promise<void>;
+  sendPasswordResetEmail: (
+    auth: Auth,
+    email: string,
+    actionCodeSettings?: ActionCodeSettings,
+  ) => Promise<void>;
   signOut: (auth: Auth) => Promise<void>;
   reauthenticateWithCredential: (user: User, credential: AuthCredential) => Promise<UserCredential>;
   reauthenticateWithPopup: (user: User, provider: AuthProvider) => Promise<UserCredential>;
@@ -188,13 +193,19 @@ const DEFAULT_AUTH_OPS: FirebaseAuthOps = {
   createGoogleAuthProvider: () => new GoogleAuthProvider(),
   createEmailCredential: (email, password) => EmailAuthProvider.credential(email, password),
   updateProfile: (user, profile) => fbUpdateProfile(user, profile),
-  sendEmailVerification: (user) => fbSendEmailVerification(user),
+  sendEmailVerification: (user, actionCodeSettings) =>
+    actionCodeSettings !== undefined
+      ? fbSendEmailVerification(user, actionCodeSettings)
+      : fbSendEmailVerification(user),
   reload: (user) => (typeof user.reload === 'function' ? user.reload() : fbReload(user)),
   getIdToken: (user, forceRefresh) =>
     typeof user.getIdToken === 'function'
       ? user.getIdToken(forceRefresh)
       : fbGetIdToken(user, forceRefresh),
-  sendPasswordResetEmail: (auth, email) => fbSendPasswordResetEmail(auth, email),
+  sendPasswordResetEmail: (auth, email, actionCodeSettings) =>
+    actionCodeSettings !== undefined
+      ? fbSendPasswordResetEmail(auth, email, actionCodeSettings)
+      : fbSendPasswordResetEmail(auth, email),
   signOut: (auth) => fbSignOut(auth),
   reauthenticateWithCredential: (user, credential) =>
     fbReauthenticateWithCredential(user, credential),
@@ -225,6 +236,38 @@ function getDefaultStorage(): StorageLike | null {
     // Ignore storage access failures in restricted browser modes.
   }
   return null;
+}
+
+/**
+ * Builds Firebase `ActionCodeSettings` pointing the hosted confirmation Continue button back
+ * to the active app URL with `?authReturn=1`, or `undefined` outside http/https browser contexts.
+ */
+export function buildAuthContinueActionCodeSettings(): ActionCodeSettings | undefined {
+  if (typeof window === 'undefined' || !window.location) {
+    return undefined;
+  }
+
+  const rawOrigin = typeof window.location.origin === 'string' ? window.location.origin.trim() : '';
+  if (!rawOrigin) {
+    return undefined;
+  }
+
+  try {
+    const parsedOrigin = new URL(rawOrigin);
+    if (parsedOrigin.protocol !== 'http:' && parsedOrigin.protocol !== 'https:') {
+      return undefined;
+    }
+    const rawPath =
+      typeof window.location.pathname === 'string'
+        ? (window.location.pathname.split('?')[0]?.split('#')[0] ?? '')
+        : '';
+    const normalizedPath = rawPath ? `/${rawPath.replace(/^\/+/, '')}` : '/';
+    return {
+      url: `${parsedOrigin.origin}${normalizedPath}?authReturn=1`,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export function getPendingHandleStorageKey(uid: string): string {
@@ -693,6 +736,15 @@ export class FirebaseCloudProvider implements CloudProvider {
     return db;
   }
 
+  private async sendVerificationWithContinueUrl(user: User): Promise<void> {
+    const actionCodeSettings = buildAuthContinueActionCodeSettings();
+    if (actionCodeSettings) {
+      await this.deps.authOps.sendEmailVerification(user, actionCodeSettings);
+    } else {
+      await this.deps.authOps.sendEmailVerification(user);
+    }
+  }
+
   isConfigured(): boolean {
     return this.deps.isConfigured();
   }
@@ -740,7 +792,7 @@ export class FirebaseCloudProvider implements CloudProvider {
         displayName: handleCheck.normalized,
       });
       savePendingHandleToStorage(cred.user.uid, handleCheck.normalized, this.getStorage());
-      await this.deps.authOps.sendEmailVerification(cred.user);
+      await this.sendVerificationWithContinueUrl(cred.user);
 
       // Never write to Firestore before email verification because firestore.rules requires isVerified().
       return mapFirebaseUser(cred.user, handleCheck.normalized)!;
@@ -792,7 +844,7 @@ export class FirebaseCloudProvider implements CloudProvider {
       return;
     }
     try {
-      await this.deps.authOps.sendEmailVerification(currentUser);
+      await this.sendVerificationWithContinueUrl(currentUser);
     } catch (err) {
       throw toCloudError(err);
     }
@@ -822,7 +874,16 @@ export class FirebaseCloudProvider implements CloudProvider {
       throw new Error(emailCheck.error ?? 'Please enter a valid email address.');
     }
     try {
-      await this.deps.authOps.sendPasswordResetEmail(auth, emailCheck.normalized);
+      const actionCodeSettings = buildAuthContinueActionCodeSettings();
+      if (actionCodeSettings) {
+        await this.deps.authOps.sendPasswordResetEmail(
+          auth,
+          emailCheck.normalized,
+          actionCodeSettings,
+        );
+      } else {
+        await this.deps.authOps.sendPasswordResetEmail(auth, emailCheck.normalized);
+      }
     } catch (err) {
       throw toCloudError(err);
     }

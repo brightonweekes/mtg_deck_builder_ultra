@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getPendingHandleStorageKey } from '../cloud/firebaseProvider.js';
 import {
+  ACTIVE_DECK_STORAGE_KEY,
   CloudSyncEngine,
   buildAccountExportBundle,
   cardListToCloudCardList,
@@ -1354,21 +1355,23 @@ describe('CloudSyncEngine & Offline-First Cross-Device Sync', () => {
     vi.stubGlobal('window', { localStorage: mockStorage });
 
     try {
+      expect(ACTIVE_DECK_STORAGE_KEY).toBe('ripple99_active_deck_v1');
       const pendingKey = getPendingHandleStorageKey('uid-alice');
+      expect(pendingKey).toBe('ripple99_pending_handle_uid-alice');
       store.set(pendingKey, 'alice_mtg');
-      store.set('mtg_ultra_active_deck_v1', JSON.stringify({ id: 'alice-deck', ownerUid: 'uid-alice' }));
+      store.set('ripple99_active_deck_v1', JSON.stringify({ id: 'alice-deck', ownerUid: 'uid-alice' }));
 
       await cleanupOnSignOut('uid-alice', false, db);
       expect(store.has(pendingKey)).toBe(false);
-      expect(store.has('mtg_ultra_active_deck_v1')).toBe(true);
+      expect(store.has('ripple99_active_deck_v1')).toBe(true);
 
       await cleanupOnSignOut('uid-alice', true, db);
-      expect(store.has('mtg_ultra_active_deck_v1')).toBe(false);
+      expect(store.has('ripple99_active_deck_v1')).toBe(false);
 
       // Should not delete another user's or guest's active draft in localStorage
-      store.set('mtg_ultra_active_deck_v1', JSON.stringify({ id: 'bob-deck', ownerUid: 'uid-bob' }));
+      store.set('ripple99_active_deck_v1', JSON.stringify({ id: 'bob-deck', ownerUid: 'uid-bob' }));
       await cleanupOnSignOut('uid-alice', true, db);
-      expect(store.has('mtg_ultra_active_deck_v1')).toBe(true);
+      expect(store.has('ripple99_active_deck_v1')).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }
