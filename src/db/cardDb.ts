@@ -9,6 +9,7 @@ import {
 import type { CardListRecord, DeckVisibility, SyncStatus } from '../types/cloud.js';
 import type { SyncStatusPayload } from '../types/search.js';
 
+export const DEFAULT_CARD_DB_NAME = 'ripple99';
 export const SNAPSHOT_KEY = 'commander-oracle';
 export const MANIFEST_KEY = 'manifest';
 
@@ -66,7 +67,7 @@ export class MtgCardDatabase extends Dexie {
   cardlists!: Table<CardListRecord, string>;
   syncMeta!: Table<SyncMetaRecord, string>;
 
-  constructor(name = 'mtg_deck_builder_ultra') {
+  constructor(name = DEFAULT_CARD_DB_NAME) {
     super(name);
     this.version(1).stores({
       catalogSnapshots: 'id',

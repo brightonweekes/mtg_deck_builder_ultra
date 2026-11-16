@@ -46,7 +46,7 @@ import {
 } from './validation.js';
 
 const UNTOUCHED_STARTER_NAME = 'Untitled Commander Deck';
-const ACTIVE_DECK_STORAGE_KEY = 'mtg_ultra_active_deck_v1';
+export const ACTIVE_DECK_STORAGE_KEY = 'ripple99_active_deck_v1';
 
 function clearActiveDraftFromStorageForOwner(uid: string): void {
   try {

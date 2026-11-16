@@ -416,9 +416,11 @@ import {
   resetFirebaseInstancesForTesting,
 } from '../cloud/firebaseConfig.js';
 import {
+  buildAuthContinueActionCodeSettings,
   CloudProviderError,
   firebaseProvider,
   getPendingHandleStorageKey,
+  PENDING_HANDLE_STORAGE_PREFIX,
 } from '../cloud/firebaseProvider.js';
 import type { CloudCardListRecord, CloudDeckRecord } from '../types/cloud.js';
 
@@ -610,7 +612,7 @@ describe('firebaseConfig & FirebaseCloudProvider', () => {
       mockState.apps = [];
       const prodHostWindow = {
         localStorage: memoryStorage,
-        location: { hostname: 'mtg-deck-builder-ultra.pages.dev' },
+        location: { hostname: 'ripple99.pages.dev' },
       } as Record<string, unknown>;
       vi.stubGlobal('window', prodHostWindow);
       stubConfiguredFirebaseEnv('enterprise-key-1', 'true');
@@ -670,6 +672,8 @@ describe('firebaseConfig & FirebaseCloudProvider', () => {
         displayName: 'alice_mtg',
       });
       expect(firebaseMocks.sendEmailVerification).toHaveBeenCalledTimes(1);
+      expect(PENDING_HANDLE_STORAGE_PREFIX).toBe('ripple99_pending_handle_');
+      expect(getPendingHandleStorageKey('uid-new-1')).toBe('ripple99_pending_handle_uid-new-1');
       expect(memoryStorage.getItem(getPendingHandleStorageKey('uid-new-1'))).toBe('alice_mtg');
       expect(created).toEqual({
         uid: 'uid-new-1',
@@ -1384,6 +1388,67 @@ describe('firebaseConfig & FirebaseCloudProvider', () => {
       await expect(
         firebaseProvider.pushCardList(makeSampleCloudList({ id: '' }), 0),
       ).rejects.toThrow(/Invalid card list ID/i);
+    });
+
+    it('passes ActionCodeSettings continueUrl with ?authReturn=1 on http/https origins and omits it in non-browser/non-http contexts', async () => {
+      // Non-http / missing location contexts return undefined and omit actionCodeSettings
+      expect(buildAuthContinueActionCodeSettings()).toBeUndefined();
+
+      vi.stubGlobal('window', {
+        localStorage: memoryStorage,
+        location: { origin: 'file://', pathname: '/index.html' },
+      });
+      expect(buildAuthContinueActionCodeSettings()).toBeUndefined();
+
+      vi.stubGlobal('window', {
+        localStorage: memoryStorage,
+        location: { origin: 'chrome-extension://abcdef', pathname: '/popup.html' },
+      });
+      expect(buildAuthContinueActionCodeSettings()).toBeUndefined();
+
+      vi.stubGlobal('window', {
+        localStorage: memoryStorage,
+        location: { origin: 'null', pathname: '/' },
+      });
+      expect(buildAuthContinueActionCodeSettings()).toBeUndefined();
+
+      vi.stubGlobal('window', undefined);
+      expect(buildAuthContinueActionCodeSettings()).toBeUndefined();
+
+      // HTTPS browser origin passes { url: '<origin><pathname>?authReturn=1' } across all 3 auth emails
+      vi.stubGlobal('window', {
+        localStorage: memoryStorage,
+        location: { origin: 'https://ripple99.pages.dev', pathname: '/' },
+      });
+      expect(buildAuthContinueActionCodeSettings()).toEqual({
+        url: 'https://ripple99.pages.dev/?authReturn=1',
+      });
+
+      await firebaseProvider.signUpWithEmail('new@example.com', 'StrongPass1!', 'new_mage');
+      expect(firebaseMocks.sendEmailVerification).toHaveBeenLastCalledWith(expect.any(Object), {
+        url: 'https://ripple99.pages.dev/?authReturn=1',
+      });
+
+      await firebaseProvider.resendVerificationEmail();
+      expect(firebaseMocks.sendEmailVerification).toHaveBeenLastCalledWith(expect.any(Object), {
+        url: 'https://ripple99.pages.dev/?authReturn=1',
+      });
+
+      await firebaseProvider.sendPasswordReset('new@example.com');
+      expect(firebaseMocks.sendPasswordResetEmail).toHaveBeenLastCalledWith(
+        mockState.auth,
+        'new@example.com',
+        { url: 'https://ripple99.pages.dev/?authReturn=1' },
+      );
+
+      // HTTP localhost origin with subpath
+      vi.stubGlobal('window', {
+        localStorage: memoryStorage,
+        location: { origin: 'http://localhost:5173', pathname: '/studio' },
+      });
+      expect(buildAuthContinueActionCodeSettings()).toEqual({
+        url: 'http://localhost:5173/studio?authReturn=1',
+      });
     });
   });
 });

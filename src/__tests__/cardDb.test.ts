@@ -1,7 +1,9 @@
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  cardDb,
   clearCardCatalogCache,
+  DEFAULT_CARD_DB_NAME,
   MtgCardDatabase,
   SNAPSHOT_KEY,
   syncCardCatalog,
@@ -74,6 +76,14 @@ describe('cardDb IndexedDB Sync Service', () => {
       db.close();
       await db.delete();
     }
+  });
+
+  it('uses ripple99 as the default IndexedDB database name', () => {
+    expect(DEFAULT_CARD_DB_NAME).toBe('ripple99');
+    expect(cardDb.name).toBe('ripple99');
+    const defaultDb = new MtgCardDatabase();
+    createdDbs.push(defaultDb);
+    expect(defaultDb.name).toBe('ripple99');
   });
 
   it('downloads catalog on cold start and reads from IndexedDB cache in <100ms on repeat visit', async () => {

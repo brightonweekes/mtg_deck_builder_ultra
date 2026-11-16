@@ -1,8 +1,8 @@
 import {
   AlertTriangle,
+  ClipboardCheck,
   Cloud,
   Crown,
-  Database,
   FolderOpen,
   Layers,
   LayoutDashboard,
@@ -22,6 +22,7 @@ import type { CloudUser, SyncStatus, UserProfile } from '../types/cloud.js';
 import type { WorkspaceTab } from '../types/deck.js';
 import type { SearchResponsePayload, SyncStatusPayload } from '../types/search.js';
 import { ColorIdentityBadges } from './ManaSymbol.js';
+import { Ripple99Logo } from './Ripple99Logo.js';
 
 interface HeaderBarProps {
   query: string;
@@ -41,6 +42,7 @@ interface HeaderBarProps {
   onOpenMobileFilters: () => void;
   onOpenDeckDrawer: () => void;
   onOpenDeckManager: () => void;
+  onOpenAudit?: () => void;
   onOpenFriends?: () => void;
   onOpenCloudAuthOrAccount?: () => void;
   onMatchCommanderSynergy: () => void;
@@ -67,6 +69,7 @@ export function HeaderBar({
   onOpenMobileFilters,
   onOpenDeckDrawer,
   onOpenDeckManager,
+  onOpenAudit,
   onOpenFriends,
   onOpenCloudAuthOrAccount,
   onMatchCommanderSynergy,
@@ -112,15 +115,13 @@ export function HeaderBar({
           )}
 
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/15 text-amber-300 ring-1 ring-amber-400/30">
-              <Database className="h-4 w-4" />
-            </div>
-            <div className="hidden xl:block">
-              <h1 className="text-sm font-bold leading-tight text-slate-100">
-                Commander Builder Ultra
+            <Ripple99Logo className="h-8 w-8" />
+            <div className="hidden sm:block">
+              <h1 className="text-sm font-bold leading-tight tracking-tight text-slate-100">
+                Ripple99
               </h1>
-              <p className="text-[11px] text-slate-400">
-                Visual Search · Deck Studio
+              <p className="hidden text-[11px] leading-tight text-slate-400 lg:block">
+                Build Decks, Not Piles
               </p>
             </div>
           </div>
@@ -222,6 +223,18 @@ export function HeaderBar({
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
+          )}
+
+          {onOpenAudit && (
+            <button
+              type="button"
+              onClick={onOpenAudit}
+              title="Instant 99 Audit — paste any Commander decklist or check your current deck"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-emerald-400/60 hover:text-emerald-200"
+            >
+              <ClipboardCheck className="h-3.5 w-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">Audit</span>
+            </button>
           )}
 
           <button

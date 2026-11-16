@@ -4,6 +4,7 @@ import {
   Copy,
   Download,
   FolderOpen,
+  ImageDown,
   Link2,
   Plus,
   RefreshCw,
@@ -14,12 +15,17 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { buildSharedDeckUrl } from '../cloud/validation.js';
 import type { SavedDeckRecord } from '../db/cardDb.js';
-import { generateDeckId } from '../db/deckDb.js';
-import { exportDeckToText, parseDeckListText } from '../deck/deckSerializer.js';
+import { computeDeckAnalytics } from '../deck/deckAnalytics.js';
+import {
+  calculateDeckPriceUsd,
+  downloadDeckSnapshotPng,
+} from '../deck/deckCardExporter.js';
+import { exportDeckToText } from '../deck/deckSerializer.js';
 import { encodeDeckToUrlParam } from '../deck/urlCodec.js';
 import type { CompactCard } from '../types/card.js';
 import type { CloudUser, DeckVisibility, SyncStatus } from '../types/cloud.js';
-import type { DeckCardEntry, DeckDraft } from '../types/deck.js';
+import type { DeckDraft } from '../types/deck.js';
+import { resolveDeckDraftFromText } from './DeckAuditModal.js';
 
 export type DeckManagerTab = 'decks' | 'import-export' | 'share';
 
@@ -121,6 +127,8 @@ export function DeckManagerModal({
     missingNames: string[];
   } | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [isExportingPng, setIsExportingPng] = useState(false);
+  const [exportedPng, setExportedPng] = useState(false);
   const [copiedKey, setCopiedKey] = useState<'export' | 'share' | 'cloud-share' | null>(null);
 
   useEffect(() => {
@@ -128,6 +136,7 @@ export function DeckManagerModal({
       setTab(initialTab);
       setImportStatus(null);
       setCopiedKey(null);
+      setExportedPng(false);
     }
   }, [open, initialTab]);
 
@@ -182,56 +191,14 @@ export function DeckManagerModal({
   };
 
   const handleImport = async () => {
-    const parsed = parseDeckListText(importText);
-    if (parsed.lines.length === 0) return;
+    if (!importText.trim()) return;
 
     setIsImporting(true);
     try {
-      const uniqueNames = Array.from(new Set(parsed.lines.map((l) => l.name)));
-      const { byName } = await resolveCards({ names: uniqueNames });
+      const resolved = await resolveDeckDraftFromText(importText, resolveCards);
+      if (!resolved) return;
 
-      const commanders: CompactCard[] = [];
-      const mainboard: Record<string, DeckCardEntry> = {};
-      const sideboard: Record<string, DeckCardEntry> = {};
-      const missingNames: string[] = [];
-      let importedCount = 0;
-
-      for (const line of parsed.lines) {
-        const card = byName[line.name.trim().toLowerCase()];
-        if (!card) {
-          if (!missingNames.includes(line.name)) missingNames.push(line.name);
-          continue;
-        }
-
-        if (line.section === 'commander' && card.isCommanderEligible && commanders.length < 2) {
-          if (!commanders.some((c) => c.id === card.id)) {
-            commanders.push(card);
-            importedCount += 1;
-          }
-          continue;
-        }
-
-        const targetBoard = line.section === 'sideboard' ? sideboard : mainboard;
-        const existing = targetBoard[card.id];
-        targetBoard[card.id] = {
-          card,
-          quantity: (existing?.quantity ?? 0) + line.quantity,
-        };
-        importedCount += line.quantity;
-      }
-
-      const now = new Date().toISOString();
-      const nextDraft: DeckDraft = {
-        id: generateDeckId(),
-        name: parsed.name || 'Imported Commander Deck',
-        commanders,
-        mainboard,
-        sideboard,
-        lockSearchToCommanderIdentity: true,
-        createdAt: now,
-        updatedAt: now,
-      };
-
+      const { draft: nextDraft, importedCount, missingNames } = resolved;
       onImportDeckDraft(
         nextDraft,
         `Imported "${nextDraft.name}" (${importedCount} cards${
@@ -244,6 +211,22 @@ export function DeckManagerModal({
       }
     } finally {
       setIsImporting(false);
+    }
+  };
+
+  const handleExportPng = async () => {
+    if (isExportingPng) return;
+    setIsExportingPng(true);
+    try {
+      const analytics = computeDeckAnalytics(activeDeck);
+      const price = calculateDeckPriceUsd(activeDeck);
+      await downloadDeckSnapshotPng(activeDeck, analytics, price);
+      setExportedPng(true);
+      window.setTimeout(() => setExportedPng(false), 2200);
+    } catch {
+      // Ignore canvas export errors cleanly in restricted environments
+    } finally {
+      setIsExportingPng(false);
     }
   };
 
@@ -681,27 +664,49 @@ export function DeckManagerModal({
                   className="w-full break-all rounded-xl border border-slate-700 bg-slate-950 p-3 font-mono text-[11px] text-slate-300 outline-none"
                 />
 
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-mono text-[11px] text-slate-400">
                     Link length: {shareUrl.length.toLocaleString()} characters
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => void copyToClipboard(shareUrl, 'share')}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-violet-500 px-4 py-2 font-semibold text-white hover:bg-violet-400"
-                  >
-                    {copiedKey === 'share' ? (
-                      <>
-                        <Check className="h-3.5 w-3.5" />
-                        Copied Share Link
-                      </>
-                    ) : (
-                      <>
-                        <Link2 className="h-3.5 w-3.5" />
-                        Copy Share Link
-                      </>
-                    )}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isExportingPng}
+                      onClick={() => void handleExportPng()}
+                      title="Download 1200x675 Ripple99 Deck Snapshot PNG"
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2 font-semibold text-slate-200 transition hover:border-emerald-400/50 hover:text-emerald-200 disabled:opacity-50"
+                    >
+                      {exportedPng ? (
+                        <>
+                          <Check className="h-3.5 w-3.5 text-emerald-400" />
+                          Exported PNG
+                        </>
+                      ) : (
+                        <>
+                          <ImageDown className="h-3.5 w-3.5 text-emerald-400" />
+                          {isExportingPng ? 'Exporting...' : 'Export PNG'}
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void copyToClipboard(shareUrl, 'share')}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-violet-500 px-4 py-2 font-semibold text-white hover:bg-violet-400"
+                    >
+                      {copiedKey === 'share' ? (
+                        <>
+                          <Check className="h-3.5 w-3.5" />
+                          Copied Share Link
+                        </>
+                      ) : (
+                        <>
+                          <Link2 className="h-3.5 w-3.5" />
+                          Copy Share Link
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
             );

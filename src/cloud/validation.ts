@@ -52,6 +52,8 @@ export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   'profiles',
   'handle',
   'handles',
+  'ripple99',
+  'ripple',
 ]);
 
 export const MAX_DISPLAY_NAME_LEN = 60;

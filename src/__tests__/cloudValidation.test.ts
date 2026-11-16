@@ -78,7 +78,19 @@ describe('cloud validation — handles & email suggestions', () => {
     expect(validateHandle('alice$123').valid).toBe(false);
 
     // Reserved words
-    for (const reserved of ['admin', '@ADMIN', 'System', 'support', 'moderator', 'wizards', 'official']) {
+    for (const reserved of [
+      'admin',
+      '@ADMIN',
+      'System',
+      'support',
+      'moderator',
+      'wizards',
+      'official',
+      'ripple99',
+      '@Ripple99',
+      'ripple',
+      '@RIPPLE',
+    ]) {
       const res = validateHandle(reserved);
       expect(res.valid).toBe(false);
       expect(res.error).toMatch(/reserved/i);
@@ -691,6 +703,8 @@ describe('cloud validation — firestore.rules parity & null-resource safety', (
 
     expect(new Set(rulesReservedHandles)).toEqual(RESERVED_HANDLES);
     expect(rulesReservedHandles).toHaveLength(RESERVED_HANDLES.size);
+    expect(RESERVED_HANDLES.has('ripple99')).toBe(true);
+    expect(RESERVED_HANDLES.has('ripple')).toBe(true);
 
     for (const reserved of RESERVED_HANDLES) {
       const result = validateHandle(reserved);

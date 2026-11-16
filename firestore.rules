@@ -82,7 +82,9 @@ service cloud.firestore {
         'profile',
         'profiles',
         'handle',
-        'handles'
+        'handles',
+        'ripple99',
+        'ripple'
       ];
     }
 
