@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { computeDeckAnalytics } from '../deck/deckAnalytics.js';
 import {
   buildDeckSnapshotSummary,
+  buildDefaultSnapshotShareUrl,
   buildSnapshotFilename,
   calculateDeckPriceUsd,
   renderDeckSnapshotCanvas,
@@ -9,6 +10,7 @@ import {
   SNAPSHOT_CANVAS_WIDTH,
   SNAPSHOT_FOOTER_TEXT,
 } from '../deck/deckCardExporter.js';
+import { decodeDeckFromUrlParam } from '../deck/urlCodec.js';
 import type { CompactCard, FunctionalRole, ManaColor } from '../types/card.js';
 import type { DeckCardEntry, DeckDraft } from '../types/deck.js';
 
@@ -358,5 +360,90 @@ describe('deckCardExporter', () => {
     // Fallback color circles drew 'U' and 'R' cleanly without Image global
     expect(fillTextCalls).toContain('U');
     expect(fillTextCalls).toContain('R');
+    expect(result.summary.qr.included).toBe(true);
+    expect(result.summary.qr.version).toBeGreaterThanOrEqual(1);
+  });
+
+  it('builds default snapshot share URLs and embeds QR metadata with graceful oversize skipping', async () => {
+    const cmd = makeCard({
+      id: '11111111-1111-4111-8111-111111111111',
+      name: 'Atraxa, Praetors Voice',
+      isCommanderEligible: true,
+      colorIdentity: ['W', 'U', 'B', 'G'],
+    });
+    const solRing = makeCard({
+      id: '22222222-2222-4222-8222-222222222222',
+      name: 'Sol Ring',
+    });
+    const deck = makeDeck({
+      name: 'Atraxa QR Test',
+      commanders: [cmd],
+      mainboard: { [solRing.id]: { card: solRing, quantity: 1 } },
+    });
+    const analytics = computeDeckAnalytics(deck);
+
+    const defaultUrl = buildDefaultSnapshotShareUrl(deck);
+    expect(defaultUrl.startsWith('https://ripple99.pages.dev/?d=')).toBe(true);
+    const param = defaultUrl.split('?d=')[1]!;
+    expect(decodeDeckFromUrlParam(param)?.name).toBe('Atraxa QR Test');
+
+    // Default summary includes QR metadata
+    const defaultSummary = buildDeckSnapshotSummary(deck, analytics, 25);
+    expect(defaultSummary.qr.shareUrl).toBe(defaultUrl);
+    expect(defaultSummary.qr.included).toBe(true);
+    expect(defaultSummary.qr.size).toBeGreaterThanOrEqual(21);
+
+    // Custom short cloud URL uses Medium EC and compact QR version
+    const cloudSummary = buildDeckSnapshotSummary(deck, analytics, 25, {
+      shareUrl: 'https://ripple99.pages.dev/?deck=abc',
+    });
+    expect(cloudSummary.qr).toEqual({
+      shareUrl: 'https://ripple99.pages.dev/?deck=abc',
+      included: true,
+      version: 3,
+      size: 29,
+      ecLevel: 'M',
+    });
+
+    // Oversized share URL skips QR embedding gracefully without throwing
+    const oversizedUrl = `https://ripple99.pages.dev/?d=${'a'.repeat(3000)}`;
+    const { fakeCanvas, ctx } = createFakeCanvas2D();
+    const oversizedResult = await renderDeckSnapshotCanvas(deck, analytics, 25, fakeCanvas, {
+      shareUrl: oversizedUrl,
+    });
+    expect(oversizedResult.summary.qr).toEqual({
+      shareUrl: oversizedUrl,
+      included: false,
+      version: null,
+      size: null,
+      ecLevel: null,
+    });
+
+    // Normal custom URL draws QR modules onto the 2D canvas
+    const normalCanvas = createFakeCanvas2D();
+    const normalResult = await renderDeckSnapshotCanvas(deck, analytics, 25, normalCanvas.fakeCanvas, {
+      shareUrl: 'https://ripple99.pages.dev/?deck=abc',
+    });
+    expect(normalResult.summary.qr.included).toBe(true);
+    expect(normalCanvas.ctx.fillRect.mock.calls.length).toBeGreaterThan(
+      ctx.fillRect.mock.calls.length,
+    );
+
+    // Supports passing SnapshotExportOptions directly as 4th argument when document creates canvas
+    const autoCanvas = createFakeCanvas2D();
+    vi.stubGlobal('document', {
+      createElement: vi.fn(() => autoCanvas.fakeCanvas),
+    });
+    try {
+      const directOptionsResult = await renderDeckSnapshotCanvas(deck, analytics, 25, {
+        shareUrl: 'https://ripple99.pages.dev/?deck=direct-opt',
+      });
+      expect(directOptionsResult.summary.qr.included).toBe(true);
+      expect(directOptionsResult.summary.qr.shareUrl).toBe(
+        'https://ripple99.pages.dev/?deck=direct-opt',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

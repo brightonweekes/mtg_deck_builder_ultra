@@ -4,10 +4,29 @@ import { getCombinedColorIdentity } from '../search/commanderRules.js';
 import type { FunctionalRole, ManaColor } from '../types/card.js';
 import type { DeckDraft } from '../types/deck.js';
 import { ROLE_TARGETS, type CmcBucket, type DeckAnalyticsReport } from './deckAnalytics.js';
+import {
+  encodeQrMatrix,
+  type QrErrorCorrectionLevel,
+  type QrMatrixResult,
+} from './qrCode.js';
+import { encodeDeckToUrlParam } from './urlCodec.js';
 
 export const SNAPSHOT_CANVAS_WIDTH = 1200;
 export const SNAPSHOT_CANVAS_HEIGHT = 675;
 export const SNAPSHOT_FOOTER_TEXT = 'Ripple99 — Build Decks, Not Piles · ripple99.pages.dev';
+export const DEFAULT_SNAPSHOT_ORIGIN = 'https://ripple99.pages.dev';
+
+export interface SnapshotExportOptions {
+  shareUrl?: string;
+}
+
+export interface DeckSnapshotQrMetadata {
+  shareUrl: string;
+  included: boolean;
+  version: number | null;
+  size: number | null;
+  ecLevel: QrErrorCorrectionLevel | null;
+}
 
 const MAX_FILENAME_SLUG_LEN = 64;
 const GAUGE_ROLES: ReadonlyArray<{
@@ -67,6 +86,57 @@ export interface DeckSnapshotSummary {
   topThemes: Array<{ id: string; label: string }>;
   filename: string;
   footerText: string;
+  qr: DeckSnapshotQrMetadata;
+}
+
+/**
+ * Builds the default offline full-deck share URL embedded in PNG snapshots.
+ */
+export function buildDefaultSnapshotShareUrl(
+  deck: DeckDraft,
+  origin = DEFAULT_SNAPSHOT_ORIGIN,
+): string {
+  const cleanOrigin = origin.trim().replace(/\/+$/, '') || DEFAULT_SNAPSHOT_ORIGIN;
+  return `${cleanOrigin}/?d=${encodeDeckToUrlParam(deck)}`;
+}
+
+function resolveSnapshotQr(
+  deck: DeckDraft,
+  options?: SnapshotExportOptions,
+): { metadata: DeckSnapshotQrMetadata; matrix: QrMatrixResult | null } {
+  const rawShareUrl =
+    options?.shareUrl !== undefined
+      ? options.shareUrl.trim()
+      : buildDefaultSnapshotShareUrl(deck);
+  if (!rawShareUrl) {
+    return {
+      metadata: {
+        shareUrl: '',
+        included: false,
+        version: null,
+        size: null,
+        ecLevel: null,
+      },
+      matrix: null,
+    };
+  }
+
+  // Prefer Medium EC on compact cloud links; use Low EC for denser ?d= payloads
+  const matrix =
+    rawShareUrl.length <= 400
+      ? (encodeQrMatrix(rawShareUrl, 'M') ?? encodeQrMatrix(rawShareUrl, 'L'))
+      : encodeQrMatrix(rawShareUrl, 'L');
+
+  return {
+    metadata: {
+      shareUrl: rawShareUrl,
+      included: matrix !== null,
+      version: matrix?.version ?? null,
+      size: matrix?.size ?? null,
+      ecLevel: matrix?.ecLevel ?? null,
+    },
+    matrix,
+  };
 }
 
 /**
@@ -191,6 +261,17 @@ export function buildDeckSnapshotSummary(
   deck: DeckDraft,
   analytics: DeckAnalyticsReport,
   totalDeckPriceUsd?: number,
+  options?: SnapshotExportOptions,
+): DeckSnapshotSummary {
+  const resolvedQr = resolveSnapshotQr(deck, options);
+  return buildDeckSnapshotSummaryWithQr(deck, analytics, totalDeckPriceUsd, resolvedQr.metadata);
+}
+
+function buildDeckSnapshotSummaryWithQr(
+  deck: DeckDraft,
+  analytics: DeckAnalyticsReport,
+  totalDeckPriceUsd: number | undefined,
+  qr: DeckSnapshotQrMetadata,
 ): DeckSnapshotSummary {
   const title = deck.name.trim() || 'Untitled Commander Deck';
   const commanderNames = deck.commanders.map((c) => c.name);
@@ -245,6 +326,7 @@ export function buildDeckSnapshotSummary(
     topThemes: resolveTopThemes(deck),
     filename: buildSnapshotFilename(deck.name),
     footerText: SNAPSHOT_FOOTER_TEXT,
+    qr,
   };
 }
 
@@ -390,6 +472,54 @@ function drawRippleEmblem(ctx: CanvasRenderingContext2D, x: number, y: number, s
   ctx.restore();
 }
 
+const SNAPSHOT_QR_BADGE_SIZE = 92;
+const SNAPSHOT_QR_BADGE_X = SNAPSHOT_CANVAS_WIDTH - 56 - SNAPSHOT_QR_BADGE_SIZE;
+const SNAPSHOT_QR_BADGE_Y = 549;
+
+function drawSnapshotQrBadge(ctx: CanvasRenderingContext2D, matrix: QrMatrixResult): void {
+  ctx.save();
+  drawRoundedRectPath(
+    ctx,
+    SNAPSHOT_QR_BADGE_X,
+    SNAPSHOT_QR_BADGE_Y,
+    SNAPSHOT_QR_BADGE_SIZE,
+    SNAPSHOT_QR_BADGE_SIZE,
+    10,
+  );
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(203, 213, 225, 0.95)';
+  ctx.stroke();
+
+  const innerMax = SNAPSHOT_QR_BADGE_SIZE - 10;
+  const isIntegerScale = matrix.size <= innerMax;
+  const cell = isIntegerScale ? Math.floor(innerMax / matrix.size) : innerMax / matrix.size;
+  const qrDrawSize = cell * matrix.size;
+  const originX = SNAPSHOT_QR_BADGE_X + Math.floor((SNAPSHOT_QR_BADGE_SIZE - qrDrawSize) / 2);
+  const originY = SNAPSHOT_QR_BADGE_Y + Math.floor((SNAPSHOT_QR_BADGE_SIZE - qrDrawSize) / 2);
+  const moduleH = isIntegerScale ? cell : Math.max(0.75, cell);
+
+  ctx.fillStyle = '#000000';
+  for (let r = 0; r < matrix.size; r++) {
+    const rowBase = r * matrix.size;
+    let c = 0;
+    while (c < matrix.size) {
+      if (matrix.modules[rowBase + c] === 1) {
+        const startCol = c;
+        while (c < matrix.size && matrix.modules[rowBase + c] === 1) {
+          c += 1;
+        }
+        const runLen = c - startCol;
+        ctx.fillRect(originX + startCol * cell, originY + r * cell, runLen * cell, moduleH);
+      } else {
+        c += 1;
+      }
+    }
+  }
+  ctx.restore();
+}
+
 /**
  * Renders a 1200x675 dark-slate Ripple99 Deck Snapshot onto an HTMLCanvasElement.
  */
@@ -398,7 +528,29 @@ export async function renderDeckSnapshotCanvas(
   analytics: DeckAnalyticsReport,
   totalDeckPriceUsd?: number,
   targetCanvas?: HTMLCanvasElement,
+  options?: SnapshotExportOptions,
+): Promise<{ canvas: HTMLCanvasElement; summary: DeckSnapshotSummary }>;
+export async function renderDeckSnapshotCanvas(
+  deck: DeckDraft,
+  analytics: DeckAnalyticsReport,
+  totalDeckPriceUsd?: number,
+  options?: SnapshotExportOptions,
+): Promise<{ canvas: HTMLCanvasElement; summary: DeckSnapshotSummary }>;
+export async function renderDeckSnapshotCanvas(
+  deck: DeckDraft,
+  analytics: DeckAnalyticsReport,
+  totalDeckPriceUsd?: number,
+  targetCanvasOrOptions?: HTMLCanvasElement | SnapshotExportOptions,
+  maybeOptions?: SnapshotExportOptions,
 ): Promise<{ canvas: HTMLCanvasElement; summary: DeckSnapshotSummary }> {
+  const isCanvasArg =
+    targetCanvasOrOptions !== undefined &&
+    typeof (targetCanvasOrOptions as HTMLCanvasElement).getContext === 'function';
+  const targetCanvas = isCanvasArg ? (targetCanvasOrOptions as HTMLCanvasElement) : undefined;
+  const options = isCanvasArg
+    ? maybeOptions
+    : (targetCanvasOrOptions as SnapshotExportOptions | undefined);
+
   if (typeof document === 'undefined' && !targetCanvas) {
     throw new Error('Canvas rendering requires a browser DOM environment.');
   }
@@ -412,7 +564,13 @@ export async function renderDeckSnapshotCanvas(
     throw new Error('Could not acquire 2D canvas rendering context.');
   }
 
-  const summary = buildDeckSnapshotSummary(deck, analytics, totalDeckPriceUsd);
+  const resolvedQr = resolveSnapshotQr(deck, options);
+  const summary = buildDeckSnapshotSummaryWithQr(
+    deck,
+    analytics,
+    totalDeckPriceUsd,
+    resolvedQr.metadata,
+  );
   const identityTokens: string[] =
     summary.colorIdentity.length > 0
       ? summary.colorIdentity
@@ -718,6 +876,9 @@ export async function renderDeckSnapshotCanvas(
 
   // 5. Mechanical Themes Strip
   const themesY = 560;
+  const bottomRightBoundary = resolvedQr.matrix
+    ? SNAPSHOT_QR_BADGE_X - 18
+    : SNAPSHOT_CANVAS_WIDTH - 56;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   if (summary.topThemes.length > 0) {
@@ -730,7 +891,7 @@ export async function renderDeckSnapshotCanvas(
     for (const theme of summary.topThemes) {
       const labelW = ctx.measureText(theme.label).width;
       const chipW = labelW + 24;
-      if (tx + chipW > SNAPSHOT_CANVAS_WIDTH - 56) break;
+      if (tx + chipW > bottomRightBoundary) break;
 
       drawRoundedRectPath(ctx, tx, themesY, chipW, 30, 8);
       ctx.fillStyle = 'rgba(139, 92, 246, 0.16)';
@@ -749,7 +910,7 @@ export async function renderDeckSnapshotCanvas(
     ctx.fillText('Add cards or choose a Commander to highlight deck synergies.', 56, themesY + 15);
   }
 
-  // 6. Footer Bar
+  // 6. Footer Bar + Optional Bottom-Right Share QR Badge
   ctx.fillStyle = '#94a3b8';
   ctx.font = '600 13px Inter, system-ui, sans-serif';
   ctx.textAlign = 'left';
@@ -759,7 +920,11 @@ export async function renderDeckSnapshotCanvas(
   ctx.fillStyle = '#64748b';
   ctx.font = '500 12px Inter, system-ui, sans-serif';
   ctx.textAlign = 'right';
-  ctx.fillText('100% Free · Local-First · Ad-Free', SNAPSHOT_CANVAS_WIDTH - 56, 624);
+  ctx.fillText('100% Free · Local-First · Ad-Free', bottomRightBoundary, 624);
+
+  if (resolvedQr.matrix) {
+    drawSnapshotQrBadge(ctx, resolvedQr.matrix);
+  }
 
   return { canvas, summary };
 }
@@ -781,8 +946,15 @@ export async function downloadDeckSnapshotPng(
   deck: DeckDraft,
   analytics: DeckAnalyticsReport,
   totalDeckPriceUsd?: number,
+  options?: SnapshotExportOptions,
 ): Promise<DeckSnapshotSummary> {
-  const { canvas, summary } = await renderDeckSnapshotCanvas(deck, analytics, totalDeckPriceUsd);
+  const { canvas, summary } = await renderDeckSnapshotCanvas(
+    deck,
+    analytics,
+    totalDeckPriceUsd,
+    undefined,
+    options,
+  );
   const blob = await canvasToPngBlob(canvas);
 
   const a = document.createElement('a');
