@@ -25,7 +25,7 @@ import { TableQrModal } from './components/TableQrModal.js';
 import { generateDeckId } from './db/deckDb.js';
 import { computeDeckAnalytics } from './deck/deckAnalytics.js';
 import { downloadDeckSnapshotPng } from './deck/deckCardExporter.js';
-import { decodeDeckFromUrlParam, encodeDeckToUrlParam } from './deck/urlCodec.js';
+import { decodeDeckFromUrlParam } from './deck/urlCodec.js';
 import { useCardSearch } from './hooks/useCardSearch.js';
 import { useCloudAuth } from './hooks/useCloudAuth.js';
 import {
@@ -238,14 +238,6 @@ export function App() {
       return null;
     }
   }, [deck.id]);
-
-  const offlineShareUrl = useMemo(() => {
-    const encoded = encodeDeckToUrlParam(deck);
-    if (typeof window === 'undefined') {
-      return `https://ripple99.pages.dev/?d=${encoded}`;
-    }
-    return `${window.location.origin}${window.location.pathname}?d=${encoded}`;
-  }, [deck]);
 
   // If a saved deck already has a locked Commander on initial load, mirror its color identity into search
   useEffect(() => {
@@ -1051,7 +1043,7 @@ export function App() {
           onBackToSearch={() => setActiveTab('search')}
           onChooseCommander={handleChooseCommander}
           onInspectCard={handleInspectRawCard}
-          onOpenTableQr={() => setTableQrOpen(true)}
+          onOpenTableQr={cloudShareActive ? () => setTableQrOpen(true) : undefined}
           onExportPng={
             cloudShareActive && cloudShareUrl
               ? () =>
@@ -1113,7 +1105,7 @@ export function App() {
           cloudAuth.clearError();
           setAuthModalOpen(true);
         }}
-        onOpenTableQr={() => setTableQrOpen(true)}
+        onOpenTableQr={cloudShareActive ? () => setTableQrOpen(true) : undefined}
       />
 
       {/* Instant 99 Audit Modal */}
@@ -1139,7 +1131,6 @@ export function App() {
         deck={deck}
         cloudShareUrl={cloudShareUrl}
         cloudShareActive={cloudShareActive}
-        offlineShareUrl={offlineShareUrl}
         onClose={() => setTableQrOpen(false)}
         onOpenShareSettings={() => {
           setTableQrOpen(false);

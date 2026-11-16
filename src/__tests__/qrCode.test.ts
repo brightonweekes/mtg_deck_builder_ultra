@@ -483,71 +483,66 @@ describe('qrCode pure ISO/IEC 18004 generator', () => {
     );
   });
 
-  it('renders TableQrModal across closed, cloud-active, offline, and oversized states', () => {
-    const deck = makeDeck();
+  it('renders TableQrModal across closed, Public, Unlisted Link, and inactive visibility states', () => {
+    const publicDeck: DeckDraft = { ...makeDeck(), visibility: 'public' };
+    const unlistedDeck: DeckDraft = { ...makeDeck(), visibility: 'link' };
+    const privateDeck: DeckDraft = { ...makeDeck(), visibility: 'private' };
 
     const closedHtml = renderToStaticMarkup(
       createElement(TableQrModal, {
         open: false,
-        deck,
+        deck: publicDeck,
         cloudShareUrl: 'https://ripple99.pages.dev/?deck=abc',
         cloudShareActive: true,
-        offlineShareUrl: 'https://ripple99.pages.dev/?d=offline',
         onClose: () => {},
       }),
     );
     expect(closedHtml).toBe('');
 
-    const cloudHtml = renderToStaticMarkup(
+    const publicHtml = renderToStaticMarkup(
       createElement(TableQrModal, {
         open: true,
-        deck,
+        deck: publicDeck,
         cloudShareUrl: 'https://ripple99.pages.dev/?deck=abc',
         cloudShareActive: true,
-        offlineShareUrl: 'https://ripple99.pages.dev/?d=offline',
         onClose: () => {},
       }),
     );
-    expect(cloudHtml).toContain('Table QR Share');
-    expect(cloudHtml).toContain('Izzet Spellslinger');
-    expect(cloudHtml).toContain('Cloud Link QR (?deck=...)');
-    expect(cloudHtml).toContain('Offline Full-Deck QR (?d=...)');
-    expect(cloudHtml).toContain('v3 · 29×29');
-    expect(cloudHtml).toContain('EC-M');
-    expect(cloudHtml).toContain('data:image/svg+xml;charset=utf-8,');
-    expect(cloudHtml).toContain('https://ripple99.pages.dev/?deck=abc');
+    expect(publicHtml).toContain('Table QR Share');
+    expect(publicHtml).toContain('Public');
+    expect(publicHtml).toContain('Izzet Spellslinger');
+    expect(publicHtml).toContain('v3 · 29×29');
+    expect(publicHtml).toContain('EC-M');
+    expect(publicHtml).toContain('data:image/svg+xml;charset=utf-8,');
+    expect(publicHtml).toContain('https://ripple99.pages.dev/?deck=abc');
+    expect(publicHtml).not.toContain('Offline Full-Deck QR');
 
-    const offlineOnlyHtml = renderToStaticMarkup(
+    const unlistedHtml = renderToStaticMarkup(
       createElement(TableQrModal, {
         open: true,
-        deck,
+        deck: unlistedDeck,
+        cloudShareUrl: 'https://ripple99.pages.dev/?deck=unlisted-123',
+        cloudShareActive: true,
+        onClose: () => {},
+      }),
+    );
+    expect(unlistedHtml).toContain('Unlisted Link');
+    expect(unlistedHtml).toContain('https://ripple99.pages.dev/?deck=unlisted-123');
+    expect(unlistedHtml).toContain('data:image/svg+xml;charset=utf-8,');
+
+    const inactiveHtml = renderToStaticMarkup(
+      createElement(TableQrModal, {
+        open: true,
+        deck: privateDeck,
         cloudShareUrl: null,
         cloudShareActive: false,
-        offlineShareUrl: 'https://ripple99.pages.dev/?d=sampledeck123',
         onClose: () => {},
         onOpenShareSettings: () => {},
       }),
     );
-    expect(offlineOnlyHtml).toContain('Offline Full-Deck QR (?d=...)');
-    expect(offlineOnlyHtml).toContain('Public');
-    expect(offlineOnlyHtml).toContain('Unlisted Link');
-    expect(offlineOnlyHtml).toContain('Share Settings');
-    expect(offlineOnlyHtml).toContain('https://ripple99.pages.dev/?d=sampledeck123');
-    expect(offlineOnlyHtml).toContain('data:image/svg+xml;charset=utf-8,');
-
-    const oversizedHtml = renderToStaticMarkup(
-      createElement(TableQrModal, {
-        open: true,
-        deck,
-        cloudShareUrl: null,
-        cloudShareActive: false,
-        offlineShareUrl: `https://ripple99.pages.dev/?d=${'x'.repeat(3000)}`,
-        onClose: () => {},
-        onOpenShareSettings: () => {},
-      }),
-    );
-    expect(oversizedHtml).toContain('2,953');
-    expect(oversizedHtml).toContain('Enable Cloud Link QR');
-    expect(oversizedHtml).not.toContain('data:image/svg+xml');
+    expect(inactiveHtml).toContain('Enable Public or Unlisted Link Visibility');
+    expect(inactiveHtml).toContain('Open Share Settings');
+    expect(inactiveHtml).not.toContain('data:image/svg+xml');
+    expect(inactiveHtml).not.toContain('Offline Full-Deck QR');
   });
 });

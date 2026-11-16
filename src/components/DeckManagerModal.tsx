@@ -226,13 +226,11 @@ export function DeckManagerModal({
       const activeVis = activeDeck.visibility ?? 'private';
       const isCloudShareActive =
         Boolean(cloudUser?.emailVerified) && (activeVis === 'link' || activeVis === 'public');
-      const preferredShareUrl =
-        isCloudShareActive && cloudShareUrl ? cloudShareUrl : shareUrl;
       await downloadDeckSnapshotPng(
         activeDeck,
         analytics,
         price,
-        preferredShareUrl ? { shareUrl: preferredShareUrl } : undefined,
+        isCloudShareActive && cloudShareUrl ? { shareUrl: cloudShareUrl } : undefined,
       );
       setExportedPng(true);
       window.setTimeout(() => setExportedPng(false), 2200);
@@ -520,7 +518,7 @@ export function DeckManagerModal({
                     <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/70 p-3">
                       <p className="max-w-md text-xs text-slate-300">
                         {isCloudConfigured
-                          ? 'Sign in to publish a short cloud share link (?deck=...) and keep visibility across devices.'
+                          ? 'Sign in to publish a short cloud share link (?deck=...), scannable Table QR code, and keep visibility across devices.'
                           : 'Cloud sync is not configured in this build. You can still share using the zero-server ?d= URL below.'}
                       </p>
                       {onOpenAuth && isCloudConfigured && (
@@ -559,7 +557,7 @@ export function DeckManagerModal({
                       <p className="text-xs text-slate-300">
                         Publish <strong className="text-slate-100">{activeDeck.name}</strong> with
                         Unlisted Link or Public visibility so anyone can inspect and clone it via a
-                        clean short link.
+                        clean short link or scannable Table QR code.
                       </p>
 
                       {onChangeVisibility && (
@@ -608,6 +606,20 @@ export function DeckManagerModal({
                               aria-label="Cloud short share URL"
                               className="min-w-0 flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-[11px] text-slate-200 outline-none"
                             />
+                            {onOpenTableQr && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onClose();
+                                  onOpenTableQr();
+                                }}
+                                title="Show scannable LGS Table QR code"
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2 text-xs font-semibold text-slate-200 transition hover:border-amber-400/50 hover:text-amber-200"
+                              >
+                                <QrCode className="h-3.5 w-3.5 text-amber-400" />
+                                Table QR
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => void copyToClipboard(cloudShareUrl, 'cloud-share')}
@@ -652,7 +664,8 @@ export function DeckManagerModal({
                         <p className="text-[11px] text-slate-400">
                           Choose <strong className="text-slate-200">Set Unlisted Link</strong> or{' '}
                           <strong className="text-slate-200">Set Public</strong> above to activate{' '}
-                          <code className="font-mono text-sky-300">?deck={activeDeck.id}</code>.
+                          <code className="font-mono text-sky-300">?deck={activeDeck.id}</code> and
+                          Table QR sharing.
                         </p>
                       )}
                     </>
@@ -682,21 +695,6 @@ export function DeckManagerModal({
                     Link length: {shareUrl.length.toLocaleString()} characters
                   </span>
                   <div className="flex flex-wrap items-center gap-2">
-                    {onOpenTableQr && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onClose();
-                          onOpenTableQr();
-                        }}
-                        title="Show scannable LGS Table QR code"
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2 font-semibold text-slate-200 transition hover:border-amber-400/50 hover:text-amber-200"
-                      >
-                        <QrCode className="h-3.5 w-3.5 text-amber-400" />
-                        Table QR
-                      </button>
-                    )}
-
                     <button
                       type="button"
                       disabled={isExportingPng}

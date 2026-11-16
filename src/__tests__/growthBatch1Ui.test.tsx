@@ -585,7 +585,7 @@ describe('Ripple99 Growth Batch 1 UI & Helpers', () => {
     expect(filterAuditUpgradeMatches([{ card: upgradeCard, synergyScore: 68, matchedReasons: [] }], updatedDraft)).toEqual([]);
   });
 
-  it('renders Table QR buttons in DeckWorkspace and DeckManagerModal Share tab when onOpenTableQr is provided', () => {
+  it('renders Table QR buttons only for online/unlisted cloud-shareable decks and keeps DeckWorkspace clean when omitted', () => {
     const deck = makeDeck({ name: 'Fixture Brew' });
     const analytics = computeDeckAnalytics(deck);
 
@@ -625,11 +625,21 @@ describe('Ripple99 Growth Batch 1 UI & Helpers', () => {
     const workspaceWithoutQr = renderToStaticMarkup(<DeckWorkspace {...workspaceBaseProps} />);
     expect(workspaceWithoutQr).not.toContain('Table QR');
 
+    const verifiedCloudUser = {
+      uid: 'uid-1',
+      email: 'brewer@example.com',
+      emailVerified: true,
+      displayName: 'Brewer',
+      providerIds: ['password'],
+    };
+
     const managerBaseProps = {
       open: true,
       initialTab: 'share' as const,
-      activeDeck: deck,
+      activeDeck: { ...deck, visibility: 'public' as const },
       savedDecks: [],
+      cloudUser: verifiedCloudUser,
+      isCloudConfigured: true,
       resolveCards: noopResolveCards,
       onClose: () => {},
       onCreateNewDeck: async () => {},
@@ -639,13 +649,33 @@ describe('Ripple99 Growth Batch 1 UI & Helpers', () => {
       onImportDeckDraft: () => {},
     };
 
-    const managerWithQr = renderToStaticMarkup(
+    const managerPublicWithQr = renderToStaticMarkup(
       <DeckManagerModal {...managerBaseProps} onOpenTableQr={() => {}} />,
     );
-    expect(managerWithQr).toContain('Table QR');
+    expect(managerPublicWithQr).toContain('Table QR');
+    expect(managerPublicWithQr).toContain('Copy Cloud Link');
+
+    const managerUnlistedWithQr = renderToStaticMarkup(
+      <DeckManagerModal
+        {...managerBaseProps}
+        activeDeck={{ ...deck, visibility: 'link' }}
+        onOpenTableQr={() => {}}
+      />,
+    );
+    expect(managerUnlistedWithQr).toContain('Table QR');
+
+    const managerPrivate = renderToStaticMarkup(
+      <DeckManagerModal
+        {...managerBaseProps}
+        activeDeck={{ ...deck, visibility: 'private' }}
+        onOpenTableQr={() => {}}
+      />,
+    );
+    expect(managerPrivate).not.toContain('Show scannable LGS Table QR code');
+    expect(managerPrivate).toContain('Table QR sharing');
 
     const managerWithoutQr = renderToStaticMarkup(<DeckManagerModal {...managerBaseProps} />);
-    expect(managerWithoutQr).not.toContain('Table QR');
+    expect(managerWithoutQr).not.toContain('Show scannable LGS Table QR code');
   });
 
   it('handles ONEOFF_SEARCH in SearchWorkerController without overwriting pendingSearch and flushes after indexing', async () => {

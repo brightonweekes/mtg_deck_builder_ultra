@@ -9,7 +9,6 @@ import {
   type QrErrorCorrectionLevel,
   type QrMatrixResult,
 } from './qrCode.js';
-import { encodeDeckToUrlParam } from './urlCodec.js';
 
 export const SNAPSHOT_CANVAS_WIDTH = 1200;
 export const SNAPSHOT_CANVAS_HEIGHT = 675;
@@ -99,17 +98,6 @@ export interface DeckSnapshotSummary {
   qr: DeckSnapshotQrMetadata;
 }
 
-/**
- * Builds the default offline full-deck share URL embedded in PNG snapshots.
- */
-export function buildDefaultSnapshotShareUrl(
-  deck: DeckDraft,
-  origin = DEFAULT_SNAPSHOT_ORIGIN,
-): string {
-  const cleanOrigin = origin.trim().replace(/\/+$/, '') || DEFAULT_SNAPSHOT_ORIGIN;
-  return `${cleanOrigin}/?d=${encodeDeckToUrlParam(deck)}`;
-}
-
 function computeQrModulePixelSize(matrixSize: number): number {
   return Math.floor(
     SNAPSHOT_QR_BADGE_SIZE / (matrixSize + SNAPSHOT_QR_MIN_QUIET_MODULES * 2),
@@ -131,14 +119,12 @@ function tryEncodeScannableBadgeQr(
 }
 
 function resolveSnapshotQr(
-  deck: DeckDraft,
   options?: SnapshotExportOptions,
 ): { metadata: DeckSnapshotQrMetadata; matrix: QrMatrixResult | null; modulePx: number } {
-  const rawShareUrl =
-    options?.shareUrl !== undefined
-      ? options.shareUrl.trim()
-      : buildDefaultSnapshotShareUrl(deck);
-  if (!rawShareUrl) {
+  const hasExplicitShareUrl = options?.shareUrl !== undefined;
+  const rawShareUrl = hasExplicitShareUrl ? options.shareUrl!.trim() : '';
+
+  if (hasExplicitShareUrl && !rawShareUrl) {
     return {
       metadata: {
         shareUrl: '',
@@ -155,26 +141,28 @@ function resolveSnapshotQr(
     };
   }
 
-  const direct = tryEncodeScannableBadgeQr(rawShareUrl);
-  if (direct) {
-    return {
-      metadata: {
-        shareUrl: rawShareUrl,
-        included: true,
-        isFallback: false,
-        label: 'Scan to Open',
+  if (rawShareUrl) {
+    const direct = tryEncodeScannableBadgeQr(rawShareUrl);
+    if (direct) {
+      return {
+        metadata: {
+          shareUrl: rawShareUrl,
+          included: true,
+          isFallback: false,
+          label: 'Scan to Open',
+          modulePx: direct.modulePx,
+          version: direct.matrix.version,
+          size: direct.matrix.size,
+          ecLevel: direct.matrix.ecLevel,
+        },
+        matrix: direct.matrix,
         modulePx: direct.modulePx,
-        version: direct.matrix.version,
-        size: direct.matrix.size,
-        ecLevel: direct.matrix.ecLevel,
-      },
-      matrix: direct.matrix,
-      modulePx: direct.modulePx,
-    };
+      };
+    }
   }
 
-  // Dense ?d= payloads (e.g. 100-card decks) exceed >=2px integer scaling with >=4-module quiet zone;
-  // fall back to the crisp Ripple99 homepage QR so every PNG snapshot remains scannable.
+  // For private/local decks without an online/unlisted ?deck= URL (or oversized custom URLs),
+  // embed the compact Ripple99 homepage QR so every PNG snapshot keeps a crisp, scannable badge.
   const fallback = tryEncodeScannableBadgeQr(DEFAULT_SNAPSHOT_ORIGIN);
   if (fallback) {
     return {
@@ -333,7 +321,7 @@ export function buildDeckSnapshotSummary(
   totalDeckPriceUsd?: number,
   options?: SnapshotExportOptions,
 ): DeckSnapshotSummary {
-  const resolvedQr = resolveSnapshotQr(deck, options);
+  const resolvedQr = resolveSnapshotQr(options);
   return buildDeckSnapshotSummaryWithQr(deck, analytics, totalDeckPriceUsd, resolvedQr.metadata);
 }
 
@@ -637,7 +625,7 @@ export async function renderDeckSnapshotCanvas(
     throw new Error('Could not acquire 2D canvas rendering context.');
   }
 
-  const resolvedQr = resolveSnapshotQr(deck, options);
+  const resolvedQr = resolveSnapshotQr(options);
   const summary = buildDeckSnapshotSummaryWithQr(
     deck,
     analytics,

@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { computeDeckAnalytics } from '../deck/deckAnalytics.js';
 import {
   buildDeckSnapshotSummary,
-  buildDefaultSnapshotShareUrl,
   buildSnapshotFilename,
   calculateDeckPriceUsd,
   DEFAULT_SNAPSHOT_ORIGIN,
@@ -14,7 +13,6 @@ import {
   SNAPSHOT_QR_BADGE_X,
   SNAPSHOT_QR_BADGE_Y,
 } from '../deck/deckCardExporter.js';
-import { decodeDeckFromUrlParam } from '../deck/urlCodec.js';
 import type { CompactCard, FunctionalRole, ManaColor } from '../types/card.js';
 import type { DeckCardEntry, DeckDraft } from '../types/deck.js';
 
@@ -368,7 +366,7 @@ describe('deckCardExporter', () => {
     expect(result.summary.qr.version).toBeGreaterThanOrEqual(1);
   });
 
-  it('builds default snapshot share URLs and embeds scannable integer-scaled QR badges with 100-card fallback', async () => {
+  it('embeds scannable integer-scaled online/unlisted QR badges and falls back to Ripple99 homepage QR for private decks', async () => {
     const assertBadgeQrGeometry = (
       fillRectCalls: unknown[][],
       expectedModulePx: number,
@@ -424,34 +422,37 @@ describe('deckCardExporter', () => {
       id: '22222222-2222-4222-8222-222222222222',
       name: 'Sol Ring',
     });
-    const smallDeck = makeDeck({
+    const privateDeck = makeDeck({
       name: 'Atraxa QR Test',
       commanders: [cmd],
       mainboard: { [solRing.id]: { card: solRing, quantity: 1 } },
     });
-    const smallAnalytics = computeDeckAnalytics(smallDeck);
+    const smallAnalytics = computeDeckAnalytics(privateDeck);
 
-    const defaultSmallUrl = buildDefaultSnapshotShareUrl(smallDeck);
-    expect(defaultSmallUrl.startsWith('https://ripple99.pages.dev/?d=')).toBe(true);
-    const param = defaultSmallUrl.split('?d=')[1]!;
-    expect(decodeDeckFromUrlParam(param)?.name).toBe('Atraxa QR Test');
-
-    // Small 2-card UUID ?d= deck (104 bytes) fits inside 100x100 badge at V6-M, 2 px/module
-    const smallSummary = buildDeckSnapshotSummary(smallDeck, smallAnalytics, 25);
-    expect(smallSummary.qr).toEqual({
-      shareUrl: defaultSmallUrl,
+    // Without explicit shareUrl (private/local deck), PNG embeds Ripple99 homepage QR (V2-M, 3 px/module)
+    const defaultCanvas = createFakeCanvas2D();
+    const defaultResult = await renderDeckSnapshotCanvas(
+      privateDeck,
+      smallAnalytics,
+      25,
+      defaultCanvas.fakeCanvas,
+    );
+    expect(defaultResult.summary.qr).toEqual({
+      shareUrl: DEFAULT_SNAPSHOT_ORIGIN,
       included: true,
-      isFallback: false,
-      label: 'Scan to Open',
-      modulePx: 2,
-      version: 6,
-      size: 41,
+      isFallback: true,
+      label: 'Scan for Ripple99',
+      modulePx: 3,
+      version: 2,
+      size: 25,
       ecLevel: 'M',
     });
+    expect(defaultCanvas.fillTextCalls).toContain('Scan for Ripple99');
+    assertBadgeQrGeometry(defaultCanvas.ctx.fillRect.mock.calls, 3);
 
-    // 120-byte URL overflows V6-M (106 B) -> drops to V6-L (134 B) to stay scannable at 2 px/module
-    const mediumCustomUrl = `https://ripple99.pages.dev/?deck=${'x'.repeat(88)}`; // 118 bytes
-    const mediumSummary = buildDeckSnapshotSummary(smallDeck, smallAnalytics, 25, {
+    // 118-byte ?deck= URL overflows V6-M (106 B) -> drops to V6-L (134 B) to stay scannable at 2 px/module
+    const mediumCustomUrl = `https://ripple99.pages.dev/?deck=${'x'.repeat(88)}`;
+    const mediumSummary = buildDeckSnapshotSummary(privateDeck, smallAnalytics, 25, {
       shareUrl: mediumCustomUrl,
     });
     expect(mediumSummary.qr).toEqual({
@@ -468,7 +469,7 @@ describe('deckCardExporter', () => {
     // Short ?deck= cloud link uses Medium EC, integer module scaling, and "Scan to Open"
     const cloudCanvas = createFakeCanvas2D();
     const cloudResult = await renderDeckSnapshotCanvas(
-      smallDeck,
+      privateDeck,
       smallAnalytics,
       25,
       cloudCanvas.fakeCanvas,
@@ -487,62 +488,11 @@ describe('deckCardExporter', () => {
     expect(cloudCanvas.fillTextCalls).toContain('Scan to Open');
     assertBadgeQrGeometry(cloudCanvas.ctx.fillRect.mock.calls, 2);
 
-    // Realistic 100-card offline ?d= deck (1 commander + 65 unique UUIDs + 34 Forest)
-    // is too dense for >=2 px/module + >=4-module quiet zone -> falls back cleanly to Ripple99 URL
-    const fullMainboard: Record<string, DeckCardEntry> = {};
-    const forest = makeCard({
-      id: '33333333-3333-4333-8333-000000000099',
-      name: 'Forest',
-      manaCost: '',
-      cmc: 0,
-      typeLine: 'Basic Land — Forest',
-      colorIdentity: ['G'],
-      maxCopies: null,
-    });
-    fullMainboard[forest.id] = { card: forest, quantity: 34 };
-    for (let i = 1; i <= 65; i++) {
-      const hexIdx = i.toString(16).padStart(12, '0');
-      const card = makeCard({
-        id: `44444444-4444-4444-8444-${hexIdx}`,
-        name: `Test Spell ${i}`,
-        colorIdentity: ['G'],
-      });
-      fullMainboard[card.id] = { card, quantity: 1 };
-    }
-    const hundredCardDeck = makeDeck({
-      name: 'Realistic 100-Card Commander Brew',
-      commanders: [cmd],
-      mainboard: fullMainboard,
-    });
-    const hundredAnalytics = computeDeckAnalytics(hundredCardDeck);
-    expect(hundredAnalytics.totalCount).toBe(100);
-    expect(buildDefaultSnapshotShareUrl(hundredCardDeck).length).toBeGreaterThan(1400);
-
-    const hundredCanvas = createFakeCanvas2D();
-    const hundredResult = await renderDeckSnapshotCanvas(
-      hundredCardDeck,
-      hundredAnalytics,
-      150,
-      hundredCanvas.fakeCanvas,
-    );
-    expect(hundredResult.summary.qr).toEqual({
-      shareUrl: DEFAULT_SNAPSHOT_ORIGIN,
-      included: true,
-      isFallback: true,
-      label: 'Scan for Ripple99',
-      modulePx: 3,
-      version: 2,
-      size: 25,
-      ecLevel: 'M',
-    });
-    expect(hundredCanvas.fillTextCalls).toContain('Scan for Ripple99');
-    assertBadgeQrGeometry(hundredCanvas.ctx.fillRect.mock.calls, 3);
-
-    // Oversized > 2,953-byte share URL also gracefully falls back to Ripple99 URL
-    const oversizedUrl = `https://ripple99.pages.dev/?d=${'a'.repeat(3000)}`;
+    // Oversized custom share URL also gracefully falls back to Ripple99 homepage QR
+    const oversizedUrl = `https://ripple99.pages.dev/?deck=${'a'.repeat(3000)}`;
     const oversizedCanvas = createFakeCanvas2D();
     const oversizedResult = await renderDeckSnapshotCanvas(
-      smallDeck,
+      privateDeck,
       smallAnalytics,
       25,
       oversizedCanvas.fakeCanvas,
@@ -564,7 +514,7 @@ describe('deckCardExporter', () => {
     // Explicit empty shareUrl skips QR badge entirely
     const emptyCanvas = createFakeCanvas2D();
     const emptyResult = await renderDeckSnapshotCanvas(
-      smallDeck,
+      privateDeck,
       smallAnalytics,
       25,
       emptyCanvas.fakeCanvas,
@@ -590,7 +540,7 @@ describe('deckCardExporter', () => {
       createElement: vi.fn(() => autoCanvas.fakeCanvas),
     });
     try {
-      const directOptionsResult = await renderDeckSnapshotCanvas(smallDeck, smallAnalytics, 25, {
+      const directOptionsResult = await renderDeckSnapshotCanvas(privateDeck, smallAnalytics, 25, {
         shareUrl: 'https://ripple99.pages.dev/?deck=direct-opt',
       });
       expect(directOptionsResult.summary.qr.included).toBe(true);
