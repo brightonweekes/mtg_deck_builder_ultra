@@ -1,73 +1,64 @@
+import { memo } from 'react';
+import { resolveManaSymbolAsset } from '../assets/mana/manaSymbolRegistry.js';
 import type { ManaColor } from '../types/card.js';
 
-const SYMBOL_STYLES: Record<string, { bg: string; text: string; label?: string }> = {
-  W: { bg: 'bg-amber-100 ring-amber-300/70', text: 'text-slate-900' },
-  U: { bg: 'bg-sky-400 ring-sky-200/70', text: 'text-slate-950' },
-  B: { bg: 'bg-purple-900 ring-purple-400/60', text: 'text-purple-100' },
-  R: { bg: 'bg-rose-500 ring-rose-300/70', text: 'text-white' },
-  G: { bg: 'bg-emerald-500 ring-emerald-300/70', text: 'text-slate-950' },
-  C: { bg: 'bg-slate-400 ring-slate-200/60', text: 'text-slate-950' },
-  T: { bg: 'bg-slate-700 ring-slate-500/70', text: 'text-slate-100', label: '↷' },
-  Q: { bg: 'bg-slate-700 ring-slate-500/70', text: 'text-slate-100', label: '↶' },
-  E: { bg: 'bg-amber-500/20 ring-amber-400/60', text: 'text-amber-300', label: '⚡' },
+export type ManaBadgeSize = 'xs' | 'sm' | 'md' | 'lg';
+
+const BADGE_DIMENSIONS: Readonly<
+  Record<ManaBadgeSize, { px: number; imgClass: string; genericClass: string }>
+> = {
+  xs: { px: 16, imgClass: 'h-4 w-4', genericClass: 'h-4 min-w-4 px-0.5 text-[9px]' },
+  sm: { px: 20, imgClass: 'h-5 w-5', genericClass: 'h-5 min-w-5 px-1 text-[10px]' },
+  md: { px: 24, imgClass: 'h-6 w-6', genericClass: 'h-6 min-w-6 px-1 text-xs' },
+  lg: { px: 28, imgClass: 'h-7 w-7', genericClass: 'h-7 min-w-7 px-1 text-xs' },
 };
 
-function getSymbolStyle(token: string): { bg: string; text: string; display: string } {
-  const upper = token.toUpperCase();
-  const exact = SYMBOL_STYLES[upper];
-  if (exact) {
-    return { bg: exact.bg, text: exact.text, display: exact.label ?? upper };
-  }
-
-  if (upper.includes('/')) {
-    const parts = upper.split('/');
-    const first = parts[0] ?? '';
-    const second = parts[1] ?? '';
-    if (second === 'P' && SYMBOL_STYLES[first]) {
-      return {
-        bg: SYMBOL_STYLES[first].bg,
-        text: SYMBOL_STYLES[first].text,
-        display: `${first}φ`,
-      };
-    }
-    return {
-      bg: 'bg-gradient-to-br from-slate-600 to-slate-800 ring-slate-400/60',
-      text: 'text-slate-100',
-      display: upper,
-    };
-  }
-
-  return {
-    bg: 'bg-slate-700 ring-slate-500/70',
-    text: 'text-slate-100',
-    display: upper,
-  };
-}
-
-export function ManaSymbolBadge({
+export const ManaSymbolBadge = memo(function ManaSymbolBadge({
   symbol,
   size = 'sm',
+  className = '',
 }: {
   symbol: string;
-  size?: 'xs' | 'sm' | 'md';
+  size?: ManaBadgeSize;
+  className?: string;
 }) {
-  const style = getSymbolStyle(symbol);
-  const sizeClass =
-    size === 'xs'
-      ? 'h-4 min-w-4 px-0.5 text-[9px]'
-      : size === 'md'
-        ? 'h-6 min-w-6 px-1 text-xs'
-        : 'h-5 min-w-5 px-1 text-[10px]';
+  const asset = resolveManaSymbolAsset(symbol);
+  const dim = BADGE_DIMENSIONS[size];
+  const label = `{${symbol}}`;
+
+  if (asset.kind === 'svg-img') {
+    const shapeClass =
+      asset.shape === 'circle'
+        ? asset.darkRing
+          ? 'rounded-full ring-1 ring-slate-500/80'
+          : 'rounded-full ring-1 ring-black/25'
+        : 'object-contain';
+
+    return (
+      <img
+        src={asset.src}
+        alt={label}
+        title={label}
+        width={dim.px}
+        height={dim.px}
+        decoding="async"
+        draggable={false}
+        data-mana-symbol={symbol.trim().toUpperCase()}
+        className={`inline-block shrink-0 select-none ${dim.imgClass} ${shapeClass} ${className}`.trim()}
+      />
+    );
+  }
 
   return (
     <span
-      title={`{${symbol}}`}
-      className={`inline-flex items-center justify-center rounded-full font-bold leading-none ring-1 ${sizeClass} ${style.bg} ${style.text}`}
+      title={label}
+      data-mana-symbol={symbol.trim().toUpperCase()}
+      className={`inline-flex shrink-0 select-none items-center justify-center rounded-full bg-[#ccc2c0] font-bold leading-none text-[#130c0e] ring-1 ring-black/25 ${dim.genericClass} ${className}`.trim()}
     >
-      {style.display}
+      {asset.text}
     </span>
   );
-}
+});
 
 const RE_MANA_TOKEN = /\{([^}]+)\}/g;
 
@@ -76,7 +67,7 @@ export function ManaCostDisplay({
   size = 'sm',
 }: {
   manaCost: string;
-  size?: 'xs' | 'sm' | 'md';
+  size?: ManaBadgeSize;
 }) {
   if (!manaCost) return null;
 
@@ -109,7 +100,7 @@ export function ColorIdentityBadges({
   size = 'xs',
 }: {
   colors: readonly ManaColor[];
-  size?: 'xs' | 'sm';
+  size?: 'xs' | 'sm' | 'md';
 }) {
   if (colors.length === 0) {
     return <ManaSymbolBadge symbol="C" size={size} />;
@@ -157,7 +148,7 @@ export function OracleTextDisplay({ text }: { text: string }) {
           <p key={lineIdx}>
             {segments.map((seg, i) =>
               seg.kind === 'sym' ? (
-                <span key={i} className="mx-0.5 inline-block align-middle">
+                <span key={i} className="mx-0.5 -mt-0.5 inline-flex align-middle">
                   <ManaSymbolBadge symbol={seg.val} size="xs" />
                 </span>
               ) : (

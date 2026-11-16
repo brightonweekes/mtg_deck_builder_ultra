@@ -9,7 +9,7 @@ This document tracks non-blocking bugs, data-pipeline quirks, and detailed solut
 | ID | Summary | Severity | Status | Primary Areas |
 | :--- | :--- | :--- | :--- | :--- |
 | **BUG-001** | High-value Reserved List & paper Commander cards missing/unpriced due to Scryfall `oracle-cards` MTGO representative printings (*Gaea's Cradle* sorts `#1` High → Low) | Medium-High | **Resolved (Fixed)** | [card-normalizer.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/scripts/lib/card-normalizer.ts), [paper-backfill.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/scripts/lib/paper-backfill.ts), [build-card-index.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/scripts/build-card-index.ts) |
-| **BUG-002** | Flaky wall-clock search latency assertions (`< 25 ms`) failing on GitHub Actions shared CI runners (`27.78 ms` / `28.29 ms` on commit `e80f155`) | Low-Medium | **Open (Deferred)** | [searchEngine.test.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/__tests__/searchEngine.test.ts), [searchEngine.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/search/searchEngine.ts), [ci.yml](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/.github/workflows/ci.yml) |
+| **BUG-002** | Flaky wall-clock search latency assertions (`< 25 ms`) failing on GitHub Actions shared CI runners (`27.78 ms` / `28.29 ms` on commit `e80f155`) | Low-Medium | **Resolved (Fixed)** | [searchEngine.test.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/__tests__/searchEngine.test.ts), [searchEngine.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/search/searchEngine.ts), [ci.yml](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/.github/workflows/ci.yml) |
 
 ---
 
@@ -147,17 +147,20 @@ While these queries comfortably pass well under `25 ms` locally, `vitest run` ex
 #### 2. Expanded Real Catalog Size Since BUG-001
 After resolving **BUG-001**, `public/data/cards.min.json` grew from `31,597` to **`32,643`** cards (+1,046 cards, ~3.3% larger), slightly increasing worst-case query/sort work on the real catalog without updating the fixed `25 ms` CI threshold (or the test suite description).
 
-### Proposed Detailed Solution (For Future Implementation)
+### Resolution Notes (Implemented)
 
-1. **Eliminate CI Flakiness in [searchEngine.test.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/__tests__/searchEngine.test.ts):**
-   * Run a warmup search call in `beforeAll` (or measure the minimum/median of a small batch such as 3–5 runs) so V8 JIT warmup and one-off GC/scheduler pauses do not fail a single sample.
-   * Use a CI-aware ceiling (e.g., `const MAX_QUERY_MS = process.env.CI ? 50 : 25;`) so local runs keep the strict `< 25 ms` target while shared GitHub Actions runners tolerate normal VM noise without false failures.
-2. **Keep Performance Benchmarks Isolated (Optional):**
-   * Move strict micro-benchmark regression checks into a dedicated non-parallel script (`vitest bench` or `--no-file-parallelism`) rather than running wall-clock assertions concurrently with I/O-heavy tests.
-3. **CI Action Maintenance (Optional, Non-Blocking):**
-   * Update `actions/checkout` and `actions/setup-node` in [ci.yml](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/.github/workflows/ci.yml) and [update-cards.yml](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/.github/workflows/update-cards.yml) to Node 24-native major versions to clear the Node 20 deprecation warning.
+Fixed at both the engine hot path and CI/test levels while preserving the pinned Node `22` Cloudflare Pages runtime ([deployment.test.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/scripts/__tests__/deployment.test.ts#L200-L201)):
+1. **`CardSearchEngine.search()` Hot-Path Optimization ([searchEngine.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/search/searchEngine.ts)):**
+   * Replaced per-match `ScoredCardMatch` and `matchedReasons` heap allocations during the full-catalog scan with reusable pre-allocated `Int32Array` / `Float64Array` scratch buffers (`matchIndices`, `cardScores`).
+   * Added in-place bounded max-heap top-K selection (`selectTopCardIndicesInPlace`, for `endIdx <= 256 && totalMatches > endIdx * 4`) with exact tie-preserving index comparison, falling back to in-place `subarray.sort` for deeper pages.
+   * Deferred `ScoredCardMatch` and `matchedReasons` construction (`buildMatchedReasonsForCard`) strictly to the final visible page (`<= pageSize` items), cutting steady-state `theme` / `synergy` search latencies by ~2× and eliminating off-page GC pauses.
+2. **Deterministic, CI-Safe Performance Assertions ([searchEngine.test.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/__tests__/searchEngine.test.ts), [cardDb.test.ts](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/src/__tests__/cardDb.test.ts)):**
+   * Added a `beforeAll` JIT warmup pass, switched single-shot timing checks to `measureMedianExecutionMs` (median of 3 runs), added CI-aware ceilings (`25 ms` local / `50 ms` CI for queries; `100 ms` local / `200 ms` CI for index build; `100 ms` local / `250 ms` CI for `cardDb` warm cache), updated stale `31,597` descriptions to `32,000+` / `32,643`, and added an exact parity regression test comparing bounded top-K selection vs. full sorting across all 7 `sortBy` modes.
+3. **Isolated Benchmark Script & CI Workflow Modernization ([package.json](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/package.json), [ci.yml](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/.github/workflows/ci.yml), [update-cards.yml](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/.github/workflows/update-cards.yml)):**
+   * Added `"test:perf": "vitest run src/__tests__/searchEngine.test.ts --no-file-parallelism"` to `package.json`.
+   * Upgraded `actions/checkout` (`@v6`), `actions/setup-node` (`@v6`), and `actions/cache` (`@v5`) to Node 24-native major tags to eliminate Node 20 deprecation warnings.
 
-### Verification Plan (Pending)
-1. Apply the warmup / CI threshold update in `src/__tests__/searchEngine.test.ts`.
-2. Run `npm run typecheck && npm test && npm run build` locally.
-3. Push to `main` and verify the GitHub Actions [`ci.yml`](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/.github/workflows/ci.yml) `verify` job completes with exit code `0`.
+### Verification Plan (Completed Locally; Pending CI Run on Push)
+1. Verified exact parity between bounded top-K selection and full sorting across all 7 `sortBy` modes on the `32,643`-card catalog.
+2. Ran `npm run typecheck`, `npm test`, `npm run test:perf`, `npm run build`, and simulated CI execution (`CI=true`, plus CPU-constrained `taskset -c 0,1 npx vitest run --maxWorkers=4`).
+3. Push to `main` to confirm the GitHub Actions [`ci.yml`](file:///home/brightonweekes/Code/mtg_deck_builder_ultra/.github/workflows/ci.yml) `verify` job exits `0` without Node 20 deprecation warnings.

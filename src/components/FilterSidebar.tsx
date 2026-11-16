@@ -23,6 +23,38 @@ import {
 import { canHaveSecondCommander, getCombinedColorIdentity } from '../search/commanderRules.js';
 import type { CompactCard, FunctionalRole, ManaColor, PartnerCategory } from '../types/card.js';
 import type { CmcOperator, ColorMatchMode, SearchFilter } from '../types/search.js';
+import { ColorIdentityBadges, ManaSymbolBadge } from './ManaSymbol.js';
+
+function ManaFilterButton({
+  symbol,
+  label,
+  active,
+  activeRingClass,
+  onClick,
+}: {
+  symbol: string;
+  label: string;
+  active: boolean;
+  activeRingClass: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
+      className={`inline-flex h-7 w-7 items-center justify-center rounded-full p-0 transition ${
+        active
+          ? `scale-105 opacity-100 ring-2 ring-offset-1 ring-offset-slate-950 ${activeRingClass}`
+          : 'opacity-45 grayscale-[35%] ring-1 ring-slate-700/80 hover:opacity-85 hover:grayscale-0'
+      }`}
+    >
+      <ManaSymbolBadge symbol={symbol} size="lg" className="!ring-0" />
+    </button>
+  );
+}
 
 interface FilterSidebarProps {
   filter: SearchFilter;
@@ -281,25 +313,22 @@ export function FilterSidebar({
 
         {colorTab === 'identity' ? (
           <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {MANA_COLOR_CONFIG.map((c) => {
-                const active = filter.colorIdentity?.includes(c.code) ?? false;
-                return (
-                  <button
-                    key={c.code}
-                    type="button"
-                    onClick={() => toggleColorIdentity(c.code)}
-                    title={`${c.name} (${c.code})`}
-                    className={`h-7 w-7 rounded-full border text-xs transition ${
-                      active ? c.activeClass : c.pillClass
-                    }`}
-                  >
-                    {c.code}
-                  </button>
-                );
-              })}
-              <button
-                type="button"
+            <div className="flex flex-wrap items-center gap-2">
+              {MANA_COLOR_CONFIG.map((c) => (
+                <ManaFilterButton
+                  key={c.code}
+                  symbol={c.code}
+                  label={`${c.name} (${c.code})`}
+                  active={filter.colorIdentity?.includes(c.code) ?? false}
+                  activeRingClass="ring-amber-400"
+                  onClick={() => toggleColorIdentity(c.code)}
+                />
+              ))}
+              <ManaFilterButton
+                symbol="C"
+                label="Colorless Identity Only (C)"
+                active={filter.colorIdentity !== null && filter.colorIdentity.length === 0}
+                activeRingClass="ring-amber-400"
                 onClick={() =>
                   onUpdateFilter({
                     colorIdentity:
@@ -308,63 +337,46 @@ export function FilterSidebar({
                         : [],
                   })
                 }
-                title="Colorless Identity Only"
-                className={`rounded-full border px-2.5 py-1 text-xs transition ${
-                  filter.colorIdentity !== null && filter.colorIdentity.length === 0
-                    ? 'border-slate-300 bg-slate-200 font-semibold text-slate-950'
-                    : 'border-slate-700 text-slate-300 hover:bg-slate-800'
-                }`}
-              >
-                C
-              </button>
+              />
             </div>
 
             {commanders.length > 0 && (
               <button
                 type="button"
                 onClick={() => onUpdateFilter({ colorIdentity: commanderIdentity })}
-                className="inline-flex items-center gap-1 text-[11px] text-amber-300/90 hover:text-amber-200"
+                className="inline-flex items-center gap-1.5 text-[11px] text-amber-300/90 hover:text-amber-200"
               >
-                <Crown className="h-3 w-3" />
-                Sync lock to active Commander (
-                {commanderIdentity.length > 0 ? commanderIdentity.join('') : 'C'})
+                <Crown className="h-3 w-3 shrink-0" />
+                <span>Sync lock to active Commander</span>
+                <ColorIdentityBadges colors={commanderIdentity} size="xs" />
               </button>
             )}
           </div>
         ) : (
           <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {MANA_COLOR_CONFIG.map((c) => {
-                const active = !filter.colorlessOnly && filter.colors.includes(c.code);
-                return (
-                  <button
-                    key={c.code}
-                    type="button"
-                    onClick={() => toggleCardColor(c.code)}
-                    className={`h-7 w-7 rounded-full border text-xs transition ${
-                      active ? c.activeClass : c.pillClass
-                    }`}
-                  >
-                    {c.code}
-                  </button>
-                );
-              })}
-              <button
-                type="button"
+            <div className="flex flex-wrap items-center gap-2">
+              {MANA_COLOR_CONFIG.map((c) => (
+                <ManaFilterButton
+                  key={c.code}
+                  symbol={c.code}
+                  label={`${c.name} (${c.code})`}
+                  active={!filter.colorlessOnly && filter.colors.includes(c.code)}
+                  activeRingClass="ring-sky-400"
+                  onClick={() => toggleCardColor(c.code)}
+                />
+              ))}
+              <ManaFilterButton
+                symbol="C"
+                label="Colorless Only (C)"
+                active={filter.colorlessOnly}
+                activeRingClass="ring-sky-400"
                 onClick={() =>
                   onUpdateFilter({
                     colorlessOnly: !filter.colorlessOnly,
                     colors: [],
                   })
                 }
-                className={`rounded-full border px-2.5 py-1 text-xs transition ${
-                  filter.colorlessOnly
-                    ? 'border-slate-300 bg-slate-200 font-semibold text-slate-950'
-                    : 'border-slate-700 text-slate-300 hover:bg-slate-800'
-                }`}
-              >
-                C
-              </button>
+              />
             </div>
 
             <select

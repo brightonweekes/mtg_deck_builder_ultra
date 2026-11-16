@@ -124,7 +124,7 @@ describe('cardDb IndexedDB Sync Service', () => {
     expect(warm.cards[1]!.name).toBe('Korvold, Fae-Cursed King');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]![0])).toContain('/data/manifest.json');
-    expect(warmElapsedMs).toBeLessThan(100);
+    expect(warmElapsedMs).toBeLessThan(process.env.CI ? 250 : 100);
   });
 
   it('invalidates cache and downloads new catalog when manifest.version changes', async () => {

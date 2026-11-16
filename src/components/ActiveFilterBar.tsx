@@ -1,7 +1,9 @@
+import type { ReactNode } from 'react';
 import { FileText, Grid2X2, LayoutGrid, X } from 'lucide-react';
 import { PARTNER_TYPE_LABELS, ROLE_BY_ID, THEME_BY_ID } from '../config/searchConfig.js';
 import type { ViewMode } from '../types/deck.js';
 import type { SearchFilter, SearchResponsePayload, SortOption } from '../types/search.js';
+import { ColorIdentityBadges, ManaSymbolBadge } from './ManaSymbol.js';
 
 interface ActiveFilterBarProps {
   filter: SearchFilter;
@@ -16,6 +18,7 @@ interface ActiveFilterBarProps {
 interface FilterChip {
   key: string;
   label: string;
+  content?: ReactNode;
   onRemove: () => void;
 }
 
@@ -50,6 +53,12 @@ export function ActiveFilterBar({
     chips.push({
       key: 'ci',
       label: `Identity: ${filter.colorIdentity.length > 0 ? filter.colorIdentity.join('') : 'Colorless'}`,
+      content: (
+        <span className="inline-flex items-center gap-1">
+          <span>Identity:</span>
+          <ColorIdentityBadges colors={filter.colorIdentity} size="xs" />
+        </span>
+      ),
       onRemove: () => onUpdateFilter({ colorIdentity: null }),
     });
   }
@@ -58,12 +67,25 @@ export function ActiveFilterBar({
     chips.push({
       key: 'colorlessOnly',
       label: 'Colors: Colorless Only',
+      content: (
+        <span className="inline-flex items-center gap-1">
+          <span>Colors:</span>
+          <ManaSymbolBadge symbol="C" size="xs" />
+          <span>Only</span>
+        </span>
+      ),
       onRemove: () => onUpdateFilter({ colorlessOnly: false }),
     });
   } else if (filter.colors.length > 0) {
     chips.push({
       key: 'colors',
       label: `Colors (${filter.colorMatchMode}): ${filter.colors.join('')}`,
+      content: (
+        <span className="inline-flex items-center gap-1">
+          <span>Colors ({filter.colorMatchMode}):</span>
+          <ColorIdentityBadges colors={filter.colors} size="xs" />
+        </span>
+      ),
       onRemove: () => onUpdateFilter({ colors: [] }),
     });
   }
@@ -231,9 +253,10 @@ export function ActiveFilterBar({
               key={chip.key}
               type="button"
               onClick={chip.onRemove}
+              aria-label={`Remove ${chip.label} filter`}
               className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900 px-2.5 py-0.5 text-[11px] text-slate-200 transition hover:border-rose-400/60 hover:text-rose-200"
             >
-              <span>{chip.label}</span>
+              {chip.content ?? <span>{chip.label}</span>}
               <X className="h-3 w-3 text-slate-400" />
             </button>
           ))}

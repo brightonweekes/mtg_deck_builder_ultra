@@ -10,6 +10,7 @@
     "build:cards": "tsx scripts/build-card-index.ts",
     "inspect:cards": "tsx scripts/inspect-cards.ts",
     "test": "vitest run",
+    "test:perf": "vitest run src/__tests__/searchEngine.test.ts --no-file-parallelism",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -460,57 +460,107 @@ function compareEdhrec(a: CompactCard, b: CompactCard): number {
   return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
 }
 
-function compareMatches(
-  a: ScoredCardMatch,
-  b: ScoredCardMatch,
-  sortBy: SearchFilter['sortBy'],
-  useSynergySort: boolean,
-): number {
-  if (useSynergySort) {
-    if (b.synergyScore !== a.synergyScore) return b.synergyScore - a.synergyScore;
-    return compareEdhrec(a.card, b.card);
+function compareNullablePrice(pa: number | null, pb: number | null, desc: boolean): number {
+  if (pa !== null && pb !== null) {
+    return desc ? pb - pa : pa - pb;
   }
+  if (pa !== null) return -1;
+  if (pb !== null) return 1;
+  return 0;
+}
+
+function compareCardIndices(
+  idxA: number,
+  idxB: number,
+  cards: readonly CompactCard[],
+  cardScores: Float64Array,
+  hasThemeScores: boolean,
+  sortBy: SearchFilter['sortBy'],
+): number {
+  const cardA = cards[idxA]!;
+  const cardB = cards[idxB]!;
+  let cmp = 0;
 
   switch (sortBy) {
     case 'synergy':
-      if (b.synergyScore !== a.synergyScore) return b.synergyScore - a.synergyScore;
-      return compareEdhrec(a.card, b.card);
+      if (hasThemeScores) {
+        const scoreDiff = cardScores[idxB]! - cardScores[idxA]!;
+        if (scoreDiff !== 0) return scoreDiff;
+      }
+      cmp = compareEdhrec(cardA, cardB);
+      break;
     case 'cmc-asc':
-      if (a.card.cmc !== b.card.cmc) return a.card.cmc - b.card.cmc;
-      return compareEdhrec(a.card, b.card);
+      if (cardA.cmc !== cardB.cmc) return cardA.cmc - cardB.cmc;
+      cmp = compareEdhrec(cardA, cardB);
+      break;
     case 'cmc-desc':
-      if (a.card.cmc !== b.card.cmc) return b.card.cmc - a.card.cmc;
-      return compareEdhrec(a.card, b.card);
-    case 'price-asc': {
-      const pa = a.card.priceUsd;
-      const pb = b.card.priceUsd;
-      if (pa !== null && pb !== null) {
-        if (pa !== pb) return pa - pb;
-      } else if (pa !== null) {
-        return -1;
-      } else if (pb !== null) {
-        return 1;
-      }
-      return compareEdhrec(a.card, b.card);
-    }
-    case 'price-desc': {
-      const pa = a.card.priceUsd;
-      const pb = b.card.priceUsd;
-      if (pa !== null && pb !== null) {
-        if (pa !== pb) return pb - pa;
-      } else if (pa !== null) {
-        return -1;
-      } else if (pb !== null) {
-        return 1;
-      }
-      return compareEdhrec(a.card, b.card);
-    }
+      if (cardA.cmc !== cardB.cmc) return cardB.cmc - cardA.cmc;
+      cmp = compareEdhrec(cardA, cardB);
+      break;
+    case 'price-asc':
+      cmp = compareNullablePrice(cardA.priceUsd, cardB.priceUsd, false) || compareEdhrec(cardA, cardB);
+      break;
+    case 'price-desc':
+      cmp = compareNullablePrice(cardA.priceUsd, cardB.priceUsd, true) || compareEdhrec(cardA, cardB);
+      break;
     case 'name-asc':
-      return a.card.name < b.card.name ? -1 : a.card.name > b.card.name ? 1 : 0;
+      cmp = cardA.name < cardB.name ? -1 : cardA.name > cardB.name ? 1 : 0;
+      break;
     case 'edhrec':
     default:
-      return compareEdhrec(a.card, b.card);
+      cmp = compareEdhrec(cardA, cardB);
+      break;
   }
+
+  return cmp !== 0 ? cmp : idxA - idxB;
+}
+
+const TOP_K_HEAP_LIMIT = 256;
+
+function siftDownMaxHeap(
+  heap: Int32Array,
+  startIdx: number,
+  heapSize: number,
+  cmp: (idxA: number, idxB: number) => number,
+): void {
+  let root = startIdx;
+  const rootVal = heap[root]!;
+  while (true) {
+    const left = (root << 1) + 1;
+    if (left >= heapSize) break;
+    const right = left + 1;
+    let worstChild = left;
+    if (right < heapSize && cmp(heap[right]!, heap[left]!) > 0) {
+      worstChild = right;
+    }
+    if (cmp(heap[worstChild]!, rootVal) <= 0) break;
+    heap[root] = heap[worstChild]!;
+    root = worstChild;
+  }
+  heap[root] = rootVal;
+}
+
+/**
+ * Selects and sorts the top `limit` matching card indices in-place inside `matchIndices`
+ * via a bounded max-heap so small page requests avoid an O(N log N) full-catalog sort.
+ */
+function selectTopCardIndicesInPlace(
+  matchIndices: Int32Array,
+  matchCount: number,
+  limit: number,
+  cmp: (idxA: number, idxB: number) => number,
+): void {
+  for (let i = (limit >> 1) - 1; i >= 0; i--) {
+    siftDownMaxHeap(matchIndices, i, limit, cmp);
+  }
+  for (let i = limit; i < matchCount; i++) {
+    const candidate = matchIndices[i]!;
+    if (cmp(candidate, matchIndices[0]!) < 0) {
+      matchIndices[0] = candidate;
+      siftDownMaxHeap(matchIndices, 0, limit, cmp);
+    }
+  }
+  matchIndices.subarray(0, limit).sort(cmp);
 }
 
 const CANONICAL_BASIC_LAND_NAMES = new Set([
@@ -541,6 +591,8 @@ export class CardSearchEngine {
   private readonly cardById: Map<string, CompactCard>;
   private readonly basicLandsByName: Record<string, CompactCard>;
   private readonly isPreSortedByEdhrec: boolean;
+  private readonly matchIndices: Int32Array;
+  private readonly cardScores: Float64Array;
   private cardByOracleId: Map<string, CompactCard> | null = null;
   private cardByName: Map<string, CompactCard> | null = null;
   private frontFaceByName: Map<string, CompactCard> | null = null;
@@ -646,6 +698,8 @@ export class CardSearchEngine {
     this.cardById = cardById;
     this.basicLandsByName = basicLandsByName;
     this.isPreSortedByEdhrec = preSorted;
+    this.matchIndices = new Int32Array(len);
+    this.cardScores = new Float64Array(len);
   }
 
   private ensureOracleIdIndex(): Map<string, CompactCard> {
@@ -755,6 +809,50 @@ export class CardSearchEngine {
     return { ...this.basicLandsByName };
   }
 
+  private buildMatchedReasonsForCard(
+    cardIdx: number,
+    themeMatcher: PreparedThemeMatcher,
+    defaultRoleReasons: string[],
+  ): string[] {
+    const themeMaskLo = this.themeMaskLos[cardIdx]!;
+    const themeMaskHi = this.themeMaskHis[cardIdx]!;
+    const cardExtraThemes =
+      this.extraThemesByIndex !== null ? (this.extraThemesByIndex.get(cardIdx) ?? null) : null;
+    const roleMask = this.roleMasks[cardIdx]!;
+    const typeLineLower = this.typeLineLowers[cardIdx]!;
+    const oracleLower = this.oracleLowers[cardIdx]!;
+    const nameLower = this.nameLowers[cardIdx]!;
+    let reasons: string[] | null = null;
+
+    for (let t = 0; t < themeMatcher.themeChecks.length; t++) {
+      const check = themeMatcher.themeChecks[t]!;
+      if (matchesThemeCheck(themeMaskLo, themeMaskHi, cardExtraThemes, check)) {
+        if (!reasons) reasons = [];
+        reasons.push(check.reason);
+      }
+    }
+    for (let r = 0; r < themeMatcher.roleChecks.length; r++) {
+      const check = themeMatcher.roleChecks[r]!;
+      if ((roleMask & check.mask) !== 0) {
+        if (!reasons) reasons = [];
+        reasons.push(check.reason);
+      }
+    }
+    for (let f = 0; f < themeMatcher.fallbackChecks.length; f++) {
+      const check = themeMatcher.fallbackChecks[f]!;
+      if (
+        typeLineLower.includes(check.term) ||
+        oracleLower.includes(check.term) ||
+        nameLower.includes(check.term)
+      ) {
+        if (!reasons) reasons = [];
+        reasons.push(check.reason);
+      }
+    }
+
+    return reasons ?? defaultRoleReasons;
+  }
+
   search(filter: SearchFilter, requestId = 0): SearchResponsePayload {
     const start = performance.now();
 
@@ -794,7 +892,9 @@ export class CardSearchEngine {
     const useSynergySort =
       filter.sortBy === 'synergy' || (hasThemeQuery && filter.sortBy === 'edhrec');
 
-    const matches: ScoredCardMatch[] = [];
+    const matchIndices = this.matchIndices;
+    const cardScores = this.cardScores;
+    let matchCount = 0;
     const cards = this.cards;
     const colorMasks = this.colorMasks;
     const ciMasks = this.ciMasks;
@@ -930,9 +1030,8 @@ export class CardSearchEngine {
         if (!allTokensMatch) continue;
       }
 
-      // 5. Method A Theme Scoring & Match Reasons
+      // 5. Method A Theme Scoring (reasons are deferred strictly to the visible page)
       let synergyScore = 0;
-      let matchedReasons: string[] | null = null;
 
       if (themeMatcher !== null) {
         const fastBitHit =
@@ -947,16 +1046,12 @@ export class CardSearchEngine {
             const check = themeMatcher.themeChecks[t]!;
             if (matchesThemeCheck(themeMaskLo, themeMaskHi, cardExtraThemes, check)) {
               synergyScore += check.weight;
-              if (!matchedReasons) matchedReasons = [];
-              matchedReasons.push(check.reason);
             }
           }
           for (let r = 0; r < themeMatcher.roleChecks.length; r++) {
             const check = themeMatcher.roleChecks[r]!;
             if ((roleMask & check.mask) !== 0) {
               synergyScore += 15;
-              if (!matchedReasons) matchedReasons = [];
-              matchedReasons.push(check.reason);
             }
           }
           for (let f = 0; f < themeMatcher.fallbackChecks.length; f++) {
@@ -967,8 +1062,6 @@ export class CardSearchEngine {
               nameLowers[i]!.includes(check.term)
             ) {
               synergyScore += 18;
-              if (!matchedReasons) matchedReasons = [];
-              matchedReasons.push(check.reason);
             }
           }
 
@@ -1013,24 +1106,46 @@ export class CardSearchEngine {
         }
       }
 
-      matches.push({
-        card,
-        synergyScore,
-        matchedReasons: matchedReasons ?? defaultRoleReasons,
-      });
+      matchIndices[matchCount] = i;
+      if (themeMatcher !== null) {
+        cardScores[i] = synergyScore;
+      }
+      matchCount++;
     }
 
-    // 6. Sort (skip sorting if catalog is already pre-sorted by EDHREC rank)
-    if (!this.isPreSortedByEdhrec || filter.sortBy !== 'edhrec' || useSynergySort) {
-      matches.sort((a, b) => compareMatches(a, b, filter.sortBy, useSynergySort));
-    }
-
-    const totalMatches = matches.length;
+    const totalMatches = matchCount;
     const pageSize = Math.max(1, filter.pageSize);
     const totalPages = Math.max(1, Math.ceil(totalMatches / pageSize));
     const safePage = Math.min(Math.max(1, filter.page), totalPages);
     const startIdx = (safePage - 1) * pageSize;
-    const pagedMatches = matches.slice(startIdx, startIdx + pageSize);
+    const endIdx = Math.min(totalMatches, startIdx + pageSize);
+
+    // 6. Select / Sort matching indices (skip sorting when already pre-sorted by EDHREC rank)
+    if (totalMatches > 0 && (!this.isPreSortedByEdhrec || filter.sortBy !== 'edhrec' || useSynergySort)) {
+      const effectiveSortBy: SearchFilter['sortBy'] = useSynergySort ? 'synergy' : filter.sortBy;
+      const hasThemeScores = themeMatcher !== null;
+      const cmp = (idxA: number, idxB: number): number =>
+        compareCardIndices(idxA, idxB, cards, cardScores, hasThemeScores, effectiveSortBy);
+
+      if (endIdx <= TOP_K_HEAP_LIMIT && totalMatches > endIdx * 4) {
+        selectTopCardIndicesInPlace(matchIndices, totalMatches, endIdx, cmp);
+      } else {
+        matchIndices.subarray(0, totalMatches).sort(cmp);
+      }
+    }
+
+    const pagedMatches: ScoredCardMatch[] = new Array<ScoredCardMatch>(endIdx - startIdx);
+    for (let p = startIdx; p < endIdx; p++) {
+      const cardIdx = matchIndices[p]!;
+      pagedMatches[p - startIdx] = {
+        card: cards[cardIdx]!,
+        synergyScore: themeMatcher !== null ? cardScores[cardIdx]! : 0,
+        matchedReasons:
+          themeMatcher !== null
+            ? this.buildMatchedReasonsForCard(cardIdx, themeMatcher, defaultRoleReasons)
+            : defaultRoleReasons,
+      };
+    }
 
     const executionTimeMs = Math.round((performance.now() - start) * 100) / 100;
 

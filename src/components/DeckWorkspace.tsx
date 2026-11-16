@@ -35,7 +35,7 @@ import { canAddCardToDeck, canHaveSecondCommander } from '../search/commanderRul
 import type { CompactCard, FunctionalRole, ManaColor } from '../types/card.js';
 import type { DeckVisibility } from '../types/cloud.js';
 import type { DeckCardEntry, DeckDraft, DeckGroupMode } from '../types/deck.js';
-import { ColorIdentityBadges, ManaCostDisplay } from './ManaSymbol.js';
+import { ColorIdentityBadges, ManaCostDisplay, ManaSymbolBadge } from './ManaSymbol.js';
 
 const VISIBILITY_OPTIONS: ReadonlyArray<{
   value: DeckVisibility;
@@ -88,54 +88,47 @@ interface DeckWorkspaceProps {
 const BASIC_LAND_ORDER: ReadonlyArray<{
   name: string;
   color: ManaPoolColor;
-  dotClass: string;
 }> = [
-  { name: 'Plains', color: 'W', dotClass: 'bg-amber-200 text-slate-950' },
-  { name: 'Island', color: 'U', dotClass: 'bg-sky-400 text-slate-950' },
-  { name: 'Swamp', color: 'B', dotClass: 'bg-purple-500 text-white' },
-  { name: 'Mountain', color: 'R', dotClass: 'bg-rose-500 text-white' },
-  { name: 'Forest', color: 'G', dotClass: 'bg-emerald-500 text-slate-950' },
-  { name: 'Wastes', color: 'C', dotClass: 'bg-slate-400 text-slate-950' },
+  { name: 'Plains', color: 'W' },
+  { name: 'Island', color: 'U' },
+  { name: 'Swamp', color: 'B' },
+  { name: 'Mountain', color: 'R' },
+  { name: 'Forest', color: 'G' },
+  { name: 'Wastes', color: 'C' },
 ] as const;
 
 const COLOR_BAR_META: Readonly<
-  Record<ManaPoolColor, { label: string; pipBar: string; sourceBar: string; badge: string }>
+  Record<ManaPoolColor, { label: string; pipBar: string; sourceBar: string }>
 > = {
   W: {
     label: 'White',
     pipBar: 'bg-amber-200',
     sourceBar: 'bg-amber-400/75',
-    badge: 'bg-amber-200 text-slate-950',
   },
   U: {
     label: 'Blue',
     pipBar: 'bg-sky-400',
     sourceBar: 'bg-sky-500/75',
-    badge: 'bg-sky-400 text-slate-950',
   },
   B: {
     label: 'Black',
     pipBar: 'bg-purple-500',
     sourceBar: 'bg-purple-400/75',
-    badge: 'bg-purple-600 text-white',
   },
   R: {
     label: 'Red',
     pipBar: 'bg-rose-500',
     sourceBar: 'bg-rose-400/75',
-    badge: 'bg-rose-500 text-white',
   },
   G: {
     label: 'Green',
     pipBar: 'bg-emerald-500',
     sourceBar: 'bg-emerald-400/75',
-    badge: 'bg-emerald-500 text-slate-950',
   },
   C: {
     label: 'Colorless',
     pipBar: 'bg-slate-400',
     sourceBar: 'bg-slate-500/75',
-    badge: 'bg-slate-400 text-slate-950',
   },
 };
 
@@ -656,11 +649,7 @@ export function DeckWorkspace({
                     className="flex items-center justify-between gap-1.5 rounded-xl border border-slate-800 bg-slate-950/80 px-2.5 py-2 text-xs"
                   >
                     <div className="flex min-w-0 items-center gap-1.5">
-                      <span
-                        className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${item.dotClass}`}
-                      >
-                        {item.color}
-                      </span>
+                      <ManaSymbolBadge symbol={item.color} size="xs" />
                       <span className="truncate font-medium text-slate-200">{item.name}</span>
                     </div>
                     <div className="flex items-center gap-1">
@@ -777,11 +766,7 @@ export function DeckWorkspace({
                 <div key={col} className="space-y-1 text-[11px]">
                   <div className="flex items-center justify-between">
                     <span className="inline-flex items-center gap-1.5 font-medium text-slate-200">
-                      <span
-                        className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${meta.badge}`}
-                      >
-                        {col}
-                      </span>
+                      <ManaSymbolBadge symbol={col} size="xs" />
                       {meta.label}
                     </span>
                     <span className="font-mono text-slate-400">

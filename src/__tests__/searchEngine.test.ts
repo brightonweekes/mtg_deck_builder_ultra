@@ -12,11 +12,28 @@ import { CardSearchEngine } from '../search/searchEngine.js';
 import type { CompactCard } from '../types/card.js';
 import { DEFAULT_SEARCH_FILTER, type SearchFilter } from '../types/search.js';
 
+const IS_CI = Boolean(process.env.CI);
+const MAX_INDEX_BUILD_MS = IS_CI ? 200 : 100;
+const MAX_QUERY_MS = IS_CI ? 50 : 25;
+
 function withFilter(patch: Partial<SearchFilter>): SearchFilter {
   return { ...DEFAULT_SEARCH_FILTER, ...patch };
 }
 
-describe('CardSearchEngine against real 31,597-card Commander catalog', () => {
+function measureMedianExecutionMs(
+  engine: CardSearchEngine,
+  filter: SearchFilter,
+  runs = 3,
+): number {
+  const samples: number[] = [];
+  for (let i = 0; i < runs; i++) {
+    samples.push(engine.search(filter).executionTimeMs);
+  }
+  samples.sort((a, b) => a - b);
+  return samples[Math.floor(samples.length / 2)]!;
+}
+
+describe('CardSearchEngine against real 32,000+-card Commander catalog', () => {
   let realCards: CompactCard[] = [];
   let engine: CardSearchEngine;
   let indexBuildTimeMs = 0;
@@ -28,19 +45,10 @@ describe('CardSearchEngine against real 31,597-card Commander catalog', () => {
     const start = performance.now();
     engine = new CardSearchEngine(realCards);
     indexBuildTimeMs = performance.now() - start;
-  });
 
-  it('indexes all ~31,597 cards in under 100ms', () => {
-    expect(engine.totalCount).toBeGreaterThan(28_000);
-    expect(indexBuildTimeMs).toBeLessThan(100);
-  });
-
-  it('executes complex queries across all 31,597 cards in under 25ms', () => {
-    const broadRes = engine.search(withFilter({}));
-    expect(broadRes.totalMatches).toBe(engine.totalCount);
-    expect(broadRes.executionTimeMs).toBeLessThan(25);
-
-    const complexRes = engine.search(
+    // Warm up V8 JIT paths before measuring query latency under parallel test load
+    engine.search(withFilter({}));
+    engine.search(
       withFilter({
         colorIdentity: ['B', 'R', 'G'],
         roles: ['ramp'],
@@ -50,17 +58,45 @@ describe('CardSearchEngine against real 31,597-card Commander catalog', () => {
         sortBy: 'price-asc',
       }),
     );
-    expect(complexRes.totalMatches).toBeGreaterThan(20);
-    expect(complexRes.executionTimeMs).toBeLessThan(25);
-
-    const themeRes = engine.search(
+    engine.search(
       withFilter({
         colorIdentity: ['B', 'R', 'G'],
         themeQuery: 'aristocrats sacrifice tokens',
       }),
     );
+    engine.search(getChooseCommanderFilter({ sortBy: 'synergy', pageSize: 48 }));
+  });
+
+  it('indexes all ~32,643 cards within latency budget', () => {
+    expect(engine.totalCount).toBeGreaterThan(28_000);
+    expect(indexBuildTimeMs).toBeLessThan(MAX_INDEX_BUILD_MS);
+  });
+
+  it('executes complex queries across all 32,000+ cards within latency budget', () => {
+    const broadFilter = withFilter({});
+    const broadRes = engine.search(broadFilter);
+    expect(broadRes.totalMatches).toBe(engine.totalCount);
+    expect(measureMedianExecutionMs(engine, broadFilter)).toBeLessThan(MAX_QUERY_MS);
+
+    const complexFilter = withFilter({
+      colorIdentity: ['B', 'R', 'G'],
+      roles: ['ramp'],
+      cmcOperator: '<=',
+      cmcValue: 3,
+      maxPriceUsd: 10,
+      sortBy: 'price-asc',
+    });
+    const complexRes = engine.search(complexFilter);
+    expect(complexRes.totalMatches).toBeGreaterThan(20);
+    expect(measureMedianExecutionMs(engine, complexFilter)).toBeLessThan(MAX_QUERY_MS);
+
+    const themeFilter = withFilter({
+      colorIdentity: ['B', 'R', 'G'],
+      themeQuery: 'aristocrats sacrifice tokens',
+    });
+    const themeRes = engine.search(themeFilter);
     expect(themeRes.totalMatches).toBeGreaterThan(50);
-    expect(themeRes.executionTimeMs).toBeLessThan(25);
+    expect(measureMedianExecutionMs(engine, themeFilter)).toBeLessThan(MAX_QUERY_MS);
   });
 
   it('enforces strict Commander Color Identity bitmask lock', () => {
@@ -275,15 +311,14 @@ describe('CardSearchEngine against real 31,597-card Commander catalog', () => {
     const synergyQuery = buildCommanderSynergyQuery([korvold!]);
     expect(synergyQuery.length).toBeGreaterThan(0);
 
-    const synergyRes = engine.search(
-      withFilter({
-        colorIdentity: getCombinedColorIdentity([korvold!]),
-        themeQuery: synergyQuery,
-        sortBy: 'synergy',
-        pageSize: 48,
-      }),
-    );
-    expect(synergyRes.executionTimeMs).toBeLessThan(25);
+    const synergyFilter = withFilter({
+      colorIdentity: getCombinedColorIdentity([korvold!]),
+      themeQuery: synergyQuery,
+      sortBy: 'synergy',
+      pageSize: 48,
+    });
+    const synergyRes = engine.search(synergyFilter);
+    expect(measureMedianExecutionMs(engine, synergyFilter)).toBeLessThan(MAX_QUERY_MS);
     expect(synergyRes.totalMatches).toBeGreaterThan(50);
     expect(synergyRes.matches[0]!.synergyScore).toBeGreaterThan(0);
     for (const { card } of synergyRes.matches) {
@@ -359,7 +394,7 @@ describe('CardSearchEngine against real 31,597-card Commander catalog', () => {
     expect(result.totalMatches).toBeGreaterThan(3_700);
     expect(result.totalMatches).toBeLessThan(engine.totalCount);
     expect(result.matches.length).toBe(48);
-    expect(result.executionTimeMs).toBeLessThan(25);
+    expect(measureMedianExecutionMs(engine, cmdFilter)).toBeLessThan(MAX_QUERY_MS);
     for (const { card } of result.matches) {
       expect(card.isCommanderEligible).toBe(true);
     }
@@ -438,5 +473,51 @@ describe('CardSearchEngine against real 31,597-card Commander catalog', () => {
       (lazyEngine as unknown as { cardByOracleId: Map<string, CompactCard> | null }).cardByOracleId,
     ).toBeInstanceOf(Map);
     expect(lazyEngine.getCardsByIds([solRing.oracleId]).map((c) => c.name)).toEqual(['Sol Ring']);
+  });
+
+  it('produces identical ordering, scores, and matchedReasons between bounded top-K selection and full sorting across all sort modes', () => {
+    const korvold = realCards.find((c) => c.name === 'Korvold, Fae-Cursed King')!;
+    const synergyQuery = buildCommanderSynergyQuery([korvold]);
+    const colorIdentity = getCombinedColorIdentity([korvold]);
+    const sortModes: SearchFilter['sortBy'][] = [
+      'synergy',
+      'edhrec',
+      'price-asc',
+      'price-desc',
+      'cmc-asc',
+      'cmc-desc',
+      'name-asc',
+    ];
+
+    for (const sortBy of sortModes) {
+      const page1 = engine.search(
+        withFilter({ colorIdentity, themeQuery: synergyQuery, sortBy, page: 1, pageSize: 48 }),
+      );
+      const page2 = engine.search(
+        withFilter({ colorIdentity, themeQuery: synergyQuery, sortBy, page: 2, pageSize: 48 }),
+      );
+      // pageSize=300 exceeds TOP_K_HEAP_LIMIT (256), exercising full subarray sort
+      const full = engine.search(
+        withFilter({ colorIdentity, themeQuery: synergyQuery, sortBy, page: 1, pageSize: 300 }),
+      );
+
+      expect(page1.totalMatches).toBe(full.totalMatches);
+      expect(page1.matches).toEqual(full.matches.slice(0, 48));
+      expect(page2.matches).toEqual(full.matches.slice(48, 96));
+    }
+
+    // Verify empty match and combined explicit themes + role pills
+    const emptyRes = engine.search(withFilter({ query: 'definitely_nonexistent_card_xyz_999' }));
+    expect(emptyRes.totalMatches).toBe(0);
+    expect(emptyRes.totalPages).toBe(1);
+    expect(emptyRes.matches).toEqual([]);
+
+    const pillRes = engine.search(
+      withFilter({ roles: ['ramp'], themes: ['treasure'], pageSize: 20 }),
+    );
+    expect(pillRes.totalMatches).toBeGreaterThan(0);
+    for (const m of pillRes.matches) {
+      expect(m.matchedReasons).toContain('Theme: Treasures');
+    }
   });
 });
