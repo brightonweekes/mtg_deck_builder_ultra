@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import {
   compactCardForDisk,
@@ -8,17 +10,25 @@ import {
   hydrateCompactCard,
   type CompactCard,
   type DataManifest,
+  type ScryfallRawCard,
   type SerializedCompactCard,
 } from '../../src/types/card.js';
 import {
+  buildCardIndex,
   MAX_CLOUDFLARE_ASSET_BYTES,
   resolveManifestGeneratedAt,
 } from '../build-card-index.js';
+import {
+  resolveCommanderOgEntry,
+  SCRYFALL_IMAGE_PREFIX,
+  type CommandersOgIndex,
+} from '../lib/commanders-og.js';
 
 const ROOT_DIR = process.cwd();
 const DATA_DIR = path.join(ROOT_DIR, 'public', 'data');
 const CARDS_PATH = path.join(DATA_DIR, 'cards.min.json');
 const MANIFEST_PATH = path.join(DATA_DIR, 'manifest.json');
+const COMMANDERS_OG_PATH = path.join(DATA_DIR, 'commanders-og.json');
 
 function makeCompactCard(overrides: Partial<CompactCard> = {}): CompactCard {
   return {
@@ -224,5 +234,157 @@ describe('Milestone 5 deployment readiness & Cloudflare Pages compliance', () =>
     expect(updateWorkflow).toContain("cron: '0 4 * * *'");
     expect(updateWorkflow).toContain('contents: write');
     expect(updateWorkflow).toContain('CLOUDFLARE_DEPLOY_HOOK_URL');
+
+    const routesPath = path.join(ROOT_DIR, 'public', '_routes.json');
+    expect(existsSync(routesPath)).toBe(true);
+    expect(JSON.parse(readFileSync(routesPath, 'utf8'))).toEqual({
+      version: 1,
+      include: ['/'],
+      exclude: [],
+    });
+  });
+
+  it('ships compact public/data/commanders-og.json under 2 MiB resolving real Commanders by id and oracleId', () => {
+    expect(existsSync(COMMANDERS_OG_PATH)).toBe(true);
+
+    const ogStats = statSync(COMMANDERS_OG_PATH);
+    expect(ogStats.size).toBeGreaterThan(100_000);
+    expect(ogStats.size).toBeLessThan(2 * 1024 * 1024);
+
+    const ogIndex = JSON.parse(readFileSync(COMMANDERS_OG_PATH, 'utf8')) as CommandersOgIndex;
+    const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as DataManifest;
+    const diskCards = JSON.parse(
+      readFileSync(CARDS_PATH, 'utf8'),
+    ) as SerializedCompactCard[];
+
+    expect(Array.isArray(ogIndex.rows)).toBe(true);
+    expect(ogIndex.rows.length).toBeGreaterThan(3_000);
+    expect(Object.keys(ogIndex.byId).length).toBe(manifest.commanderCount);
+    expect(Object.keys(ogIndex.byOracleId).length).toBeGreaterThan(3_000);
+
+    // Strip prefix verification on raw rows
+    for (const row of ogIndex.rows) {
+      if (row[2]) {
+        expect(row[2].startsWith(SCRYFALL_IMAGE_PREFIX)).toBe(false);
+      }
+    }
+
+    const atraxa = diskCards.find(
+      (c) => c.isCommanderEligible && c.name === "Atraxa, Praetors' Voice",
+    );
+    expect(atraxa).toBeDefined();
+
+    const byIdEntry = resolveCommanderOgEntry(ogIndex, atraxa!.id);
+    const byOracleEntry = resolveCommanderOgEntry(ogIndex, atraxa!.oracleId);
+
+    expect(byIdEntry).not.toBeNull();
+    expect(byOracleEntry).not.toBeNull();
+    expect(byIdEntry).toEqual(byOracleEntry);
+    expect(byIdEntry!.name).toBe("Atraxa, Praetors' Voice");
+    expect(byIdEntry!.colorIdentity).toBe('WUBG');
+    expect(byIdEntry!.imageUrl.startsWith(SCRYFALL_IMAGE_PREFIX)).toBe(true);
+    expect(byIdEntry!.imageUrl).toBe(atraxa!.imageNormal);
+
+    expect(resolveCommanderOgEntry(ogIndex, 'non-existent-id')).toBeNull();
+  });
+
+  it('writes commanders-og.json from buildCardIndex() and recreates it if missing when version is unchanged', async () => {
+    const tempRoot = mkdtempSync(path.join(tmpdir(), 'ripple99-build-idx-'));
+    const cacheDir = path.join(tempRoot, 'cache');
+    const outputDir = path.join(tempRoot, 'out');
+    try {
+      mkdirSync(cacheDir, { recursive: true });
+      mkdirSync(outputDir, { recursive: true });
+
+      const sampleRawCards: ScryfallRawCard[] = [
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          oracle_id: '22222222-2222-4222-8222-222222222222',
+          name: 'Test Commander',
+          layout: 'normal',
+          mana_cost: '{1}{U}{B}',
+          cmc: 3,
+          type_line: 'Legendary Creature — Wizard',
+          oracle_text: 'Draw a card.',
+          colors: ['U', 'B'],
+          color_identity: ['U', 'B'],
+          keywords: [],
+          legalities: { commander: 'legal' },
+          games: ['paper'],
+          digital: false,
+          edhrec_rank: 10,
+          prices: { usd: '1.00' },
+          image_uris: {
+            small: `${SCRYFALL_IMAGE_PREFIX}small/front/1/1/cmd.jpg`,
+            normal: `${SCRYFALL_IMAGE_PREFIX}normal/front/1/1/cmd.jpg`,
+          },
+        },
+        {
+          id: '33333333-3333-4333-8333-333333333333',
+          oracle_id: '44444444-4444-4444-8444-444444444444',
+          name: 'Sol Ring',
+          layout: 'normal',
+          mana_cost: '{1}',
+          cmc: 1,
+          type_line: 'Artifact',
+          oracle_text: '{T}: Add {C}{C}.',
+          colors: [],
+          color_identity: [],
+          keywords: [],
+          legalities: { commander: 'legal' },
+          games: ['paper'],
+          digital: false,
+          edhrec_rank: 1,
+          prices: { usd: '1.50' },
+          image_uris: {
+            small: `${SCRYFALL_IMAGE_PREFIX}small/front/3/3/ring.jpg`,
+            normal: `${SCRYFALL_IMAGE_PREFIX}normal/front/3/3/ring.jpg`,
+          },
+        },
+      ];
+
+      const jsonl = `${sampleRawCards.map((c) => JSON.stringify(c)).join('\n')}\n`;
+      writeFileSync(path.join(cacheDir, 'oracle-cards.jsonl.gz'), gzipSync(Buffer.from(jsonl, 'utf8')));
+      writeFileSync(
+        path.join(cacheDir, 'oracle-cards-meta.json'),
+        JSON.stringify({ updated_at: '2026-11-15T00:00:00Z' }),
+        'utf8',
+      );
+      writeFileSync(
+        path.join(cacheDir, 'paper-overrides.json'),
+        JSON.stringify({
+          version: 1,
+          updatedAt: '2026-11-15T00:00:00Z',
+          targetCount: 0,
+          overrides: {},
+        }),
+        'utf8',
+      );
+
+      const firstManifest = await buildCardIndex({ offline: true, cacheDir, outputDir });
+      const ogOutPath = path.join(outputDir, 'commanders-og.json');
+      expect(existsSync(path.join(outputDir, 'cards.min.json'))).toBe(true);
+      expect(existsSync(path.join(outputDir, 'manifest.json'))).toBe(true);
+      expect(existsSync(ogOutPath)).toBe(true);
+
+      const ogParsed = JSON.parse(readFileSync(ogOutPath, 'utf8')) as CommandersOgIndex;
+      expect(resolveCommanderOgEntry(ogParsed, '11111111-1111-4111-8111-111111111111')).toEqual({
+        name: 'Test Commander',
+        colorIdentity: 'UB',
+        imageUrl: `${SCRYFALL_IMAGE_PREFIX}normal/front/1/1/cmd.jpg`,
+      });
+      expect(resolveCommanderOgEntry(ogParsed, '33333333-3333-4333-8333-333333333333')).toBeNull();
+
+      // Remove commanders-og.json while keeping cards.min.json + manifest.json unchanged
+      unlinkSync(ogOutPath);
+      expect(existsSync(ogOutPath)).toBe(false);
+
+      const secondManifest = await buildCardIndex({ offline: true, cacheDir, outputDir });
+      expect(secondManifest.version).toBe(firstManifest.version);
+      expect(secondManifest.generatedAt).toBe(firstManifest.generatedAt);
+      expect(existsSync(ogOutPath)).toBe(true);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });

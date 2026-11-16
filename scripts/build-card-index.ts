@@ -12,6 +12,7 @@ import {
   type FunctionalRole,
 } from '../src/types/card.js';
 import { normalizeCard } from './lib/card-normalizer.js';
+import { buildCommandersOgIndex } from './lib/commanders-og.js';
 import { resolvePaperOverrides } from './lib/paper-backfill.js';
 import { fetchOracleCards } from './lib/scryfall-fetcher.js';
 
@@ -173,6 +174,7 @@ export async function buildCardIndex(options: BuildIndexOptions = {}): Promise<D
 
   const cardsOutPath = path.join(outputDir, 'cards.min.json');
   const manifestOutPath = path.join(outputDir, 'manifest.json');
+  const commandersOgOutPath = path.join(outputDir, 'commanders-og.json');
 
   const existingManifest = await readExistingManifest(manifestOutPath);
   const { generatedAt, scryfallUpdatedAt, versionChanged } = resolveManifestGeneratedAt(
@@ -196,10 +198,23 @@ export async function buildCardIndex(options: BuildIndexOptions = {}): Promise<D
     themeCounts,
   };
 
-  if (versionChanged || options.forceRefresh || !existsSync(cardsOutPath)) {
+  const commandersOgIndex = buildCommandersOgIndex(normalized);
+  const commandersOgBuffer = Buffer.from(JSON.stringify(commandersOgIndex), 'utf8');
+  if (commandersOgBuffer.byteLength >= MAX_CLOUDFLARE_ASSET_BYTES) {
+    throw new Error(
+      `commanders-og.json size (${commandersOgBuffer.byteLength.toLocaleString()} bytes) exceeds Cloudflare Pages' 25 MiB single-file limit.`,
+    );
+  }
+
+  const shouldWriteCatalog = versionChanged || options.forceRefresh || !existsSync(cardsOutPath);
+  if (shouldWriteCatalog) {
     await writeFile(cardsOutPath, rawBuffer);
     await writeFile(manifestOutPath, JSON.stringify(manifest, null, 2), 'utf8');
+    await writeFile(commandersOgOutPath, commandersOgBuffer);
   } else {
+    if (!existsSync(commandersOgOutPath)) {
+      await writeFile(commandersOgOutPath, commandersOgBuffer);
+    }
     console.log(
       `   Catalog unchanged (version ${version}); preserved existing generatedAt ${generatedAt}.`,
     );
@@ -212,10 +227,12 @@ export async function buildCardIndex(options: BuildIndexOptions = {}): Promise<D
   console.log(`Total Cards:     ${manifest.totalCards.toLocaleString()}`);
   console.log(`Commanders:      ${manifest.commanderCount.toLocaleString()}`);
   console.log(`Raw JSON Size:   ${formatMb(rawSizeBytes)} (CF headroom: ${formatMiB(headroomBytes)})`);
+  console.log(`Commanders OG:   ${(commandersOgBuffer.byteLength / 1024).toFixed(1)} KiB (${commandersOgIndex.rows.length.toLocaleString()} rows)`);
   console.log(`Gzip Size:       ${formatMb(gzipSizeBytes)}`);
   console.log(`Brotli Size:     ${formatMb(brotliSizeBytes)}`);
   console.log(`Output Files:    ${cardsOutPath}`);
   console.log(`                 ${manifestOutPath}`);
+  console.log(`                 ${commandersOgOutPath}`);
 
   console.log('\n--- Functional Roles ---');
   for (const role of FUNCTIONAL_ROLES) {
