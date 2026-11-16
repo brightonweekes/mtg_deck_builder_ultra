@@ -1,6 +1,10 @@
 import { AlertTriangle, CheckCircle2, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { humanizeCloudError, parseCloudUrlIntents } from './cloud/validation.js';
+import {
+  buildSharedDeckUrl,
+  humanizeCloudError,
+  parseCloudUrlIntents,
+} from './cloud/validation.js';
 import { AccountModal } from './components/AccountModal.js';
 import { ActiveFilterBar } from './components/ActiveFilterBar.js';
 import { AuthModal } from './components/AuthModal.js';
@@ -17,9 +21,11 @@ import { QuickDeckDrawer } from './components/QuickDeckDrawer.js';
 import { QuickStartBanner } from './components/QuickStartBanner.js';
 import { SharedDeckBanner } from './components/SharedDeckBanner.js';
 import { SyncConflictModal } from './components/SyncConflictModal.js';
+import { TableQrModal } from './components/TableQrModal.js';
 import { generateDeckId } from './db/deckDb.js';
 import { computeDeckAnalytics } from './deck/deckAnalytics.js';
-import { decodeDeckFromUrlParam } from './deck/urlCodec.js';
+import { downloadDeckSnapshotPng } from './deck/deckCardExporter.js';
+import { decodeDeckFromUrlParam, encodeDeckToUrlParam } from './deck/urlCodec.js';
 import { useCardSearch } from './hooks/useCardSearch.js';
 import { useCloudAuth } from './hooks/useCloudAuth.js';
 import {
@@ -104,6 +110,7 @@ export function App() {
     resetFilters,
     forceResync,
     resolveCards,
+    runOneOffSearch,
   } = useCardSearch();
 
   const [hasCloudUrlIntentOnMount] = useState(() =>
@@ -192,6 +199,7 @@ export function App() {
   const [deckDrawerOpen, setDeckDrawerOpen] = useState(false);
   const [deckManagerTab, setDeckManagerTab] = useState<DeckManagerTab | null>(null);
   const [auditModalOpen, setAuditModalOpen] = useState(false);
+  const [tableQrOpen, setTableQrOpen] = useState(false);
   const [inspectedMatch, setInspectedMatch] = useState<ScoredCardMatch | null>(null);
 
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -217,6 +225,27 @@ export function App() {
   const openedFriendsForPendingRef = useRef(false);
 
   const analytics = useMemo(() => computeDeckAnalytics(deck), [deck]);
+
+  const cloudShareActive =
+    Boolean(cloudAuth.user?.emailVerified) &&
+    (deck.visibility === 'link' || deck.visibility === 'public');
+
+  const cloudShareUrl = useMemo(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      return buildSharedDeckUrl(window.location.origin, window.location.pathname, deck.id);
+    } catch {
+      return null;
+    }
+  }, [deck.id]);
+
+  const offlineShareUrl = useMemo(() => {
+    const encoded = encodeDeckToUrlParam(deck);
+    if (typeof window === 'undefined') {
+      return `https://ripple99.pages.dev/?d=${encoded}`;
+    }
+    return `${window.location.origin}${window.location.pathname}?d=${encoded}`;
+  }, [deck]);
 
   // If a saved deck already has a locked Commander on initial load, mirror its color identity into search
   useEffect(() => {
@@ -1022,6 +1051,15 @@ export function App() {
           onBackToSearch={() => setActiveTab('search')}
           onChooseCommander={handleChooseCommander}
           onInspectCard={handleInspectRawCard}
+          onOpenTableQr={() => setTableQrOpen(true)}
+          onExportPng={
+            cloudShareActive && cloudShareUrl
+              ? () =>
+                  downloadDeckSnapshotPng(deck, analytics, totalDeckPriceUsd, {
+                    shareUrl: cloudShareUrl,
+                  }).then(() => undefined)
+              : undefined
+          }
         />
       )}
 
@@ -1075,6 +1113,7 @@ export function App() {
           cloudAuth.clearError();
           setAuthModalOpen(true);
         }}
+        onOpenTableQr={() => setTableQrOpen(true)}
       />
 
       {/* Instant 99 Audit Modal */}
@@ -1083,12 +1122,28 @@ export function App() {
         activeDeck={deck}
         activeDeckPriceUsd={totalDeckPriceUsd}
         resolveCards={resolveCards}
+        runOneOffSearch={runOneOffSearch}
+        onAddUpgradeCard={addCard}
         onClose={() => setAuditModalOpen(false)}
         onImportDeckDraft={handleImportDeckDraft}
         onOpenCurrentStudio={() => setActiveTab('deck')}
         onFindMissingRole={(role, auditedIdentity) => {
           handleQuickFilterRole(role, auditedIdentity);
           setAuditModalOpen(false);
+        }}
+      />
+
+      {/* Scannable LGS Table QR Modal */}
+      <TableQrModal
+        open={tableQrOpen}
+        deck={deck}
+        cloudShareUrl={cloudShareUrl}
+        cloudShareActive={cloudShareActive}
+        offlineShareUrl={offlineShareUrl}
+        onClose={() => setTableQrOpen(false)}
+        onOpenShareSettings={() => {
+          setTableQrOpen(false);
+          setDeckManagerTab('share');
         }}
       />
 

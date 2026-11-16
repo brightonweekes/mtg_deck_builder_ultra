@@ -2,8 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { hasAuthReturnIntent, hasCloudUrlIntent } from '../App.js';
 import {
+  addUpgradeCardToAuditDraft,
   auditRoleTargets,
+  buildAuditUpgradeSearchFilter,
   DeckAuditModal,
+  filterAuditUpgradeMatches,
   resolveDeckDraftFromText,
 } from '../components/DeckAuditModal.js';
 import { DeckManagerModal } from '../components/DeckManagerModal.js';
@@ -19,9 +22,17 @@ import {
 } from '../components/QuickStartBanner.js';
 import { Ripple99Logo } from '../components/Ripple99Logo.js';
 import { computeDeckAnalytics, ROLE_TARGETS } from '../deck/deckAnalytics.js';
-import type { CompactCard, ManaColor } from '../types/card.js';
+import type { SyncCatalogResult } from '../db/cardDb.js';
+import { buildEmptySearchResponse } from '../hooks/useCardSearch.js';
+import type { CompactCard, DataManifest, ManaColor } from '../types/card.js';
 import type { DeckDraft } from '../types/deck.js';
-import type { SyncStatusPayload } from '../types/search.js';
+import {
+  DEFAULT_SEARCH_FILTER,
+  type ScoredCardMatch,
+  type SyncStatusPayload,
+  type WorkerResponseMessage,
+} from '../types/search.js';
+import { SearchWorkerController } from '../workers/searchWorker.js';
 
 function makeCard(
   overrides: Partial<CompactCard> & { id: string; name: string },
@@ -381,5 +392,406 @@ describe('Ripple99 Growth Batch 1 UI & Helpers', () => {
     expect(hasAuthReturnIntent('')).toBe(false);
     expect(hasAuthReturnIntent('?deck=abc')).toBe(false);
     expect(hasAuthReturnIntent('?authReturn=1')).toBe(true);
+  });
+
+  it('builds Under-$1 Synergy Upgrade filters from commanders, mainboard fallback themes, or returns null when empty', () => {
+    const emptyDeck = makeDeck();
+    expect(buildAuditUpgradeSearchFilter(emptyDeck)).toBeNull();
+
+    const noThemeDeck = makeDeck({
+      mainboard: {
+        van1: { card: makeCard({ id: 'van1', name: 'Vanilla Bear', themes: [] }), quantity: 1 },
+      },
+    });
+    expect(buildAuditUpgradeSearchFilter(noThemeDeck)).toBeNull();
+
+    const atraxa = makeCard({
+      id: 'cmd-atraxa',
+      name: "Atraxa, Praetors' Voice",
+      colorIdentity: ['W', 'U', 'B', 'G'],
+      isCommanderEligible: true,
+      themes: ['proliferate', 'plus-one-counters'],
+      roles: ['draw'],
+    });
+    const commanderFilter = buildAuditUpgradeSearchFilter(
+      makeDeck({ commanders: [atraxa] }),
+    );
+    expect(commanderFilter).toEqual({
+      ...DEFAULT_SEARCH_FILTER,
+      colorIdentity: ['W', 'U', 'B', 'G'],
+      themeQuery: 'proliferate plus-one-counters draw',
+      maxPriceUsd: 1,
+      sortBy: 'synergy',
+      commanderOnly: false,
+      page: 1,
+      pageSize: 40,
+    });
+
+    const colorlessCmd = makeCard({
+      id: 'cmd-kozilek',
+      name: 'Kozilek',
+      colorIdentity: [],
+      isCommanderEligible: true,
+      themes: ['artifacts'],
+    });
+    const colorlessFilter = buildAuditUpgradeSearchFilter(
+      makeDeck({ commanders: [colorlessCmd] }),
+    );
+    expect(colorlessFilter?.colorIdentity).toEqual([]);
+    expect(colorlessFilter?.themeQuery).toBe('artifacts');
+
+    const noCommanderDeck = makeDeck({
+      mainboard: {
+        m1: { card: makeCard({ id: 'm1', name: 'C1', themes: ['tokens', 'aristocrats'] }), quantity: 1 },
+        m2: { card: makeCard({ id: 'm2', name: 'C2', themes: ['tokens', 'sacrifice'] }), quantity: 1 },
+        m3: { card: makeCard({ id: 'm3', name: 'C3', themes: ['tokens', 'aristocrats', 'mill'] }), quantity: 1 },
+        m4: { card: makeCard({ id: 'm4', name: 'C4', themes: ['sacrifice'] }), quantity: 1 },
+      },
+    });
+    const fallbackFilter = buildAuditUpgradeSearchFilter(noCommanderDeck);
+    expect(fallbackFilter).not.toBeNull();
+    expect(fallbackFilter?.colorIdentity).toBeNull();
+    expect(fallbackFilter?.themeQuery).toBe('tokens aristocrats sacrifice');
+    expect(fallbackFilter?.maxPriceUsd).toBe(1);
+    expect(fallbackFilter?.sortBy).toBe('synergy');
+    expect(fallbackFilter?.pageSize).toBe(40);
+  });
+
+  it('filters upgrade matches by id, oracleId across boards, excludes basic lands, and respects limit', () => {
+    const cmd = makeCard({
+      id: 'cmd-1',
+      oracleId: 'oracle-cmd-1',
+      name: 'Meren',
+      isCommanderEligible: true,
+    });
+    const mainCard = makeCard({
+      id: 'main-printing-a',
+      oracleId: 'oracle-shared-main',
+      name: 'Sakura-Tribe Elder',
+    });
+    const sbCard = makeCard({
+      id: 'sb-1',
+      oracleId: 'oracle-sb-1',
+      name: 'Victimize',
+    });
+    const draft = makeDeck({
+      commanders: [cmd],
+      mainboard: {
+        [mainCard.id]: { card: mainCard, quantity: 1 },
+      },
+      sideboard: {
+        [sbCard.id]: { card: sbCard, quantity: 1 },
+      },
+    });
+
+    const candidates: ScoredCardMatch[] = [
+      {
+        card: makeCard({ id: 'cmd-1', oracleId: 'oracle-other', name: 'Meren Dup ID' }),
+        synergyScore: 99,
+        matchedReasons: ['Theme: Graveyard'],
+      },
+      {
+        card: makeCard({ id: 'main-printing-b', oracleId: 'oracle-shared-main', name: 'Sakura-Tribe Elder Reprint' }),
+        synergyScore: 95,
+        matchedReasons: ['Theme: Sacrifice'],
+      },
+      {
+        card: makeCard({ id: 'sb-printing-b', oracleId: 'oracle-sb-1', name: 'Victimize Reprint' }),
+        synergyScore: 90,
+        matchedReasons: ['Theme: Reanimator'],
+      },
+      {
+        card: makeCard({ id: 'basic-swamp', oracleId: 'oracle-swamp', name: 'Swamp', typeLine: 'Basic Land — Swamp' }),
+        synergyScore: 85,
+        matchedReasons: [],
+      },
+      {
+        card: makeCard({ id: 'basic-snow', oracleId: 'oracle-snow', name: 'Snow-Covered Forest', typeLine: 'Basic Snow Land — Forest' }),
+        synergyScore: 84,
+        matchedReasons: [],
+      },
+      ...Array.from({ length: 12 }, (_, idx) => ({
+        card: makeCard({
+          id: `upg-${idx + 1}`,
+          oracleId: `oracle-upg-${idx + 1}`,
+          name: `Budget Upgrade ${idx + 1}`,
+          priceUsd: 0.25,
+        }),
+        synergyScore: 80 - idx,
+        matchedReasons: ['Theme: Graveyard'],
+      })),
+    ];
+
+    const top10 = filterAuditUpgradeMatches(candidates, draft);
+    expect(top10).toHaveLength(10);
+    expect(top10.map((m) => m.card.id)).toEqual(
+      Array.from({ length: 10 }, (_, idx) => `upg-${idx + 1}`),
+    );
+    expect(filterAuditUpgradeMatches(candidates, draft, 3)).toHaveLength(3);
+  });
+
+  it('renders Top Under-$1 Synergy Upgrades inside DeckAuditModal and updates pasted drafts cleanly', () => {
+    const commander = makeCard({
+      id: 'cmd-veyran',
+      name: 'Veyran, Voice of Duality',
+      colorIdentity: ['U', 'R'],
+      isCommanderEligible: true,
+      themes: ['spellslinger', 'magecraft'],
+    });
+    const draft = makeDeck({ commanders: [commander] });
+
+    const upgradeCard = makeCard({
+      id: 'upg-opt',
+      oracleId: 'oracle-opt',
+      name: 'Opt',
+      manaCost: '{U}',
+      cmc: 1,
+      typeLine: 'Instant',
+      priceUsd: 0.25,
+      themes: ['spellslinger', 'cantrip'],
+    });
+
+    const html = renderToStaticMarkup(
+      <DeckAuditModal
+        open
+        activeDeck={draft}
+        initialAuditResult={{ draft, missingNames: [], isCurrentDeck: false }}
+        initialUpgradeMatches={[
+          {
+            card: upgradeCard,
+            synergyScore: 68,
+            matchedReasons: ['Theme: Spellslinger', 'Theme: Cantrip', 'Role: Card Draw'],
+          },
+        ]}
+        runOneOffSearch={async () => buildEmptySearchResponse(1, DEFAULT_SEARCH_FILTER)}
+        resolveCards={noopResolveCards}
+        onClose={() => {}}
+        onImportDeckDraft={() => {}}
+        onFindMissingRole={() => {}}
+      />,
+    );
+
+    expect(html).toContain('Top Under-$1 Synergy Upgrades');
+    expect(html).toContain('Opt');
+    expect(html).toContain('$0.25');
+    expect(html).toContain('Theme: Spellslinger');
+    expect(html).toContain('Theme: Cantrip');
+    expect(html).not.toContain('Role: Card Draw');
+    expect(html).toContain('+ Add');
+
+    const updatedDraft = addUpgradeCardToAuditDraft(draft, upgradeCard);
+    expect(updatedDraft.mainboard[upgradeCard.id]?.quantity).toBe(1);
+    expect(computeDeckAnalytics(updatedDraft).totalCount).toBe(2);
+    expect(filterAuditUpgradeMatches([{ card: upgradeCard, synergyScore: 68, matchedReasons: [] }], updatedDraft)).toEqual([]);
+  });
+
+  it('renders Table QR buttons in DeckWorkspace and DeckManagerModal Share tab when onOpenTableQr is provided', () => {
+    const deck = makeDeck({ name: 'Fixture Brew' });
+    const analytics = computeDeckAnalytics(deck);
+
+    const workspaceBaseProps = {
+      deck,
+      analytics,
+      totalDeckPriceUsd: 0,
+      combinedColorIdentity: [] as ManaColor[],
+      basicLands: {},
+      onRenameDeck: () => {},
+      onRemoveCommander: () => {},
+      onToggleIdentityLock: () => {},
+      onMatchSynergy: () => {},
+      onFindPartner: () => {},
+      onAddCard: () => {},
+      onRemoveOneCard: () => {},
+      onDeleteCard: () => {},
+      onMoveToSideboard: () => {},
+      onMoveToMainboard: () => {},
+      onAddToSideboard: () => {},
+      onRemoveOneSideboard: () => {},
+      onDeleteSideboard: () => {},
+      onAutoFillBasics: () => {},
+      onMoveIllegalToSideboard: () => {},
+      onQuickFilterRole: () => {},
+      onOpenDeckManager: () => {},
+      onBackToSearch: () => {},
+      onChooseCommander: () => {},
+      onInspectCard: () => {},
+    };
+
+    const workspaceWithQr = renderToStaticMarkup(
+      <DeckWorkspace {...workspaceBaseProps} onOpenTableQr={() => {}} />,
+    );
+    expect(workspaceWithQr).toContain('Table QR');
+
+    const workspaceWithoutQr = renderToStaticMarkup(<DeckWorkspace {...workspaceBaseProps} />);
+    expect(workspaceWithoutQr).not.toContain('Table QR');
+
+    const managerBaseProps = {
+      open: true,
+      initialTab: 'share' as const,
+      activeDeck: deck,
+      savedDecks: [],
+      resolveCards: noopResolveCards,
+      onClose: () => {},
+      onCreateNewDeck: async () => {},
+      onSwitchDeck: async () => {},
+      onDuplicateCurrentDeck: async () => {},
+      onDeleteDeck: async () => {},
+      onImportDeckDraft: () => {},
+    };
+
+    const managerWithQr = renderToStaticMarkup(
+      <DeckManagerModal {...managerBaseProps} onOpenTableQr={() => {}} />,
+    );
+    expect(managerWithQr).toContain('Table QR');
+
+    const managerWithoutQr = renderToStaticMarkup(<DeckManagerModal {...managerBaseProps} />);
+    expect(managerWithoutQr).not.toContain('Table QR');
+  });
+
+  it('handles ONEOFF_SEARCH in SearchWorkerController without overwriting pendingSearch and flushes after indexing', async () => {
+    const posted: WorkerResponseMessage[] = [];
+    let resolveSync: ((res: SyncCatalogResult) => void) | null = null;
+
+    const controller = new SearchWorkerController((msg) => posted.push(msg), {
+      clearCache: async () => {},
+      syncCatalog: () =>
+        new Promise<SyncCatalogResult>((resolve) => {
+          resolveSync = resolve;
+        }),
+    });
+
+    controller.handleMessage({ type: 'INIT' });
+    controller.handleMessage({
+      type: 'SEARCH',
+      requestId: 10,
+      filter: { ...DEFAULT_SEARCH_FILTER, query: 'Sol' },
+    });
+    controller.handleMessage({
+      type: 'ONEOFF_SEARCH',
+      requestId: 11,
+      filter: {
+        ...DEFAULT_SEARCH_FILTER,
+        themeQuery: 'spellslinger',
+        maxPriceUsd: 1,
+        sortBy: 'synergy',
+      },
+    });
+    controller.handleMessage({
+      type: 'ONEOFF_SEARCH',
+      requestId: 12,
+      filter: {
+        ...DEFAULT_SEARCH_FILTER,
+        themeQuery: 'tokens',
+        maxPriceUsd: 1,
+        sortBy: 'synergy',
+      },
+    });
+
+    expect(posted).toEqual([]);
+
+    const sampleCards: CompactCard[] = [
+      makeCard({
+        id: 'sol-ring',
+        name: 'Sol Ring',
+        priceUsd: 1.5,
+        themes: [],
+      }),
+      makeCard({
+        id: 'budget-spell',
+        name: 'Consider',
+        priceUsd: 0.45,
+        themes: ['spellslinger'],
+      }),
+      makeCard({
+        id: 'budget-token',
+        name: 'Raise the Alarm',
+        priceUsd: 0.2,
+        themes: ['tokens'],
+      }),
+    ];
+    const manifest: DataManifest = {
+      version: 'test-v1',
+      generatedAt: '2026-11-15T00:00:00.000Z',
+      scryfallUpdatedAt: '2026-11-15T00:00:00.000Z',
+      totalCards: sampleCards.length,
+      commanderCount: 0,
+      rawSizeBytes: 100,
+      gzipSizeBytes: 50,
+      brotliSizeBytes: 40,
+      roleCounts: {
+        ramp: 0,
+        draw: 0,
+        removal: 0,
+        wipe: 0,
+        tutor: 0,
+        recursion: 0,
+        protection: 0,
+      },
+      themeCounts: {},
+    };
+
+    resolveSync!({ cards: sampleCards, manifest, fromCache: true, loadTimeMs: 5 });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const searchRes = posted.find((m) => m.type === 'SEARCH_RESULT');
+    expect(searchRes?.type).toBe('SEARCH_RESULT');
+    if (searchRes?.type === 'SEARCH_RESULT') {
+      expect(searchRes.payload.requestId).toBe(10);
+      expect(searchRes.payload.matches.map((m) => m.card.id)).toEqual(['sol-ring']);
+    }
+
+    const oneOffResults = posted.filter((m) => m.type === 'ONEOFF_SEARCH_RESULT');
+    expect(oneOffResults).toHaveLength(2);
+    if (oneOffResults[0]?.type === 'ONEOFF_SEARCH_RESULT') {
+      expect(oneOffResults[0].payload.requestId).toBe(11);
+      expect(oneOffResults[0].payload.matches.map((m) => m.card.id)).toEqual(['budget-spell']);
+    }
+    if (oneOffResults[1]?.type === 'ONEOFF_SEARCH_RESULT') {
+      expect(oneOffResults[1].payload.requestId).toBe(12);
+      expect(oneOffResults[1].payload.matches.map((m) => m.card.id)).toEqual(['budget-token']);
+    }
+
+    // Immediate ONEOFF_SEARCH once engine is ready
+    const prevSearchCount = posted.filter((m) => m.type === 'SEARCH_RESULT').length;
+    controller.handleMessage({
+      type: 'ONEOFF_SEARCH',
+      requestId: 13,
+      filter: {
+        ...DEFAULT_SEARCH_FILTER,
+        themeQuery: 'tokens',
+        maxPriceUsd: 1,
+        sortBy: 'synergy',
+      },
+    });
+    expect(posted.filter((m) => m.type === 'SEARCH_RESULT')).toHaveLength(prevSearchCount);
+    const immediateRes = posted.at(-1);
+    expect(immediateRes?.type).toBe('ONEOFF_SEARCH_RESULT');
+    if (immediateRes?.type === 'ONEOFF_SEARCH_RESULT') {
+      expect(immediateRes.payload.requestId).toBe(13);
+      expect(immediateRes.payload.matches.map((m) => m.card.id)).toEqual(['budget-token']);
+    }
+
+    // Error recovery: queued ONEOFF_SEARCH flushes with empty result on catalog init failure
+    const failedPosts: WorkerResponseMessage[] = [];
+    const failingController = new SearchWorkerController((msg) => failedPosts.push(msg), {
+      clearCache: async () => {},
+      syncCatalog: async () => {
+        throw new Error('Network offline');
+      },
+    });
+    failingController.handleMessage({ type: 'INIT' });
+    failingController.handleMessage({
+      type: 'ONEOFF_SEARCH',
+      requestId: 99,
+      filter: DEFAULT_SEARCH_FILTER,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    const emptyOneOff = failedPosts.find((m) => m.type === 'ONEOFF_SEARCH_RESULT');
+    expect(emptyOneOff?.type).toBe('ONEOFF_SEARCH_RESULT');
+    if (emptyOneOff?.type === 'ONEOFF_SEARCH_RESULT') {
+      expect(emptyOneOff.payload.requestId).toBe(99);
+      expect(emptyOneOff.payload.matches).toEqual([]);
+    }
   });
 });

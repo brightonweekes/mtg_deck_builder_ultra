@@ -13,6 +13,7 @@ import {
   Lock,
   Minus,
   Plus,
+  QrCode,
   Search,
   Share2,
   Sparkles,
@@ -86,6 +87,7 @@ interface DeckWorkspaceProps {
   onChooseCommander: () => void;
   onInspectCard: (card: CompactCard) => void;
   onExportPng?: () => void | Promise<void>;
+  onOpenTableQr?: () => void;
 }
 
 const BASIC_LAND_ORDER: ReadonlyArray<{
@@ -215,6 +217,7 @@ export function DeckWorkspace({
   onChooseCommander,
   onInspectCard,
   onExportPng,
+  onOpenTableQr,
 }: DeckWorkspaceProps) {
   const [groupMode, setGroupMode] = useState<DeckGroupMode>('role');
   const [showConsidering, setShowConsidering] = useState(true);
@@ -405,6 +408,18 @@ export function DeckWorkspace({
             <Share2 className="h-3.5 w-3.5 text-violet-400" />
             Share Link
           </button>
+
+          {onOpenTableQr && (
+            <button
+              type="button"
+              onClick={onOpenTableQr}
+              title="Show scannable LGS Table QR code"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 font-semibold text-slate-200 transition hover:border-amber-400/50 hover:text-amber-200"
+            >
+              <QrCode className="h-3.5 w-3.5 text-amber-400" />
+              Table QR
+            </button>
+          )}
 
           <button
             type="button"

@@ -7,6 +7,7 @@ import {
   ImageDown,
   Link2,
   Plus,
+  QrCode,
   RefreshCw,
   Trash2,
   Upload,
@@ -92,6 +93,7 @@ interface DeckManagerModalProps {
   onChangeVisibility?: (visibility: DeckVisibility) => void;
   onSyncNow?: () => Promise<void>;
   onOpenAuth?: () => void;
+  onOpenTableQr?: () => void;
 }
 
 function countRecordCards(record: SavedDeckRecord): number {
@@ -118,6 +120,7 @@ export function DeckManagerModal({
   onChangeVisibility,
   onSyncNow,
   onOpenAuth,
+  onOpenTableQr,
 }: DeckManagerModalProps) {
   const [tab, setTab] = useState<DeckManagerTab>(initialTab);
   const [newDeckName, setNewDeckName] = useState('');
@@ -220,7 +223,17 @@ export function DeckManagerModal({
     try {
       const analytics = computeDeckAnalytics(activeDeck);
       const price = calculateDeckPriceUsd(activeDeck);
-      await downloadDeckSnapshotPng(activeDeck, analytics, price);
+      const activeVis = activeDeck.visibility ?? 'private';
+      const isCloudShareActive =
+        Boolean(cloudUser?.emailVerified) && (activeVis === 'link' || activeVis === 'public');
+      const preferredShareUrl =
+        isCloudShareActive && cloudShareUrl ? cloudShareUrl : shareUrl;
+      await downloadDeckSnapshotPng(
+        activeDeck,
+        analytics,
+        price,
+        preferredShareUrl ? { shareUrl: preferredShareUrl } : undefined,
+      );
       setExportedPng(true);
       window.setTimeout(() => setExportedPng(false), 2200);
     } catch {
@@ -669,6 +682,21 @@ export function DeckManagerModal({
                     Link length: {shareUrl.length.toLocaleString()} characters
                   </span>
                   <div className="flex flex-wrap items-center gap-2">
+                    {onOpenTableQr && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onOpenTableQr();
+                        }}
+                        title="Show scannable LGS Table QR code"
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3.5 py-2 font-semibold text-slate-200 transition hover:border-amber-400/50 hover:text-amber-200"
+                      >
+                        <QrCode className="h-3.5 w-3.5 text-amber-400" />
+                        Table QR
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       disabled={isExportingPng}
