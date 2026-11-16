@@ -3,18 +3,15 @@ import {
   ArrowLeftRight,
   ArrowUpRight,
   BarChart3,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   Crown,
   FileText,
-  FolderOpen,
-  ImageDown,
   Lock,
   Minus,
   Plus,
-  QrCode,
-  Search,
   Share2,
   Sparkles,
   Trash2,
@@ -24,7 +21,7 @@ import {
   Wand2,
   X,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { MAX_DECK_DESC_LEN } from '../cloud/validation.js';
 import { ROLE_BY_ID } from '../config/searchConfig.js';
 import {
@@ -33,7 +30,6 @@ import {
   type DeckAnalyticsReport,
   type ManaPoolColor,
 } from '../deck/deckAnalytics.js';
-import { downloadDeckSnapshotPng } from '../deck/deckCardExporter.js';
 import { canAddCardToDeck, canHaveSecondCommander } from '../search/commanderRules.js';
 import type { CompactCard, FunctionalRole, ManaColor } from '../types/card.js';
 import type { DeckVisibility } from '../types/cloud.js';
@@ -83,11 +79,8 @@ interface DeckWorkspaceProps {
   onMoveIllegalToSideboard: () => void;
   onQuickFilterRole: (role: FunctionalRole | 'lands') => void;
   onOpenDeckManager: (tab: 'decks' | 'import-export' | 'share') => void;
-  onBackToSearch: () => void;
   onChooseCommander: () => void;
   onInspectCard: (card: CompactCard) => void;
-  onExportPng?: () => void | Promise<void>;
-  onOpenTableQr?: () => void;
 }
 
 const BASIC_LAND_ORDER: ReadonlyArray<{
@@ -213,34 +206,39 @@ export function DeckWorkspace({
   onMoveIllegalToSideboard,
   onQuickFilterRole,
   onOpenDeckManager,
-  onBackToSearch,
   onChooseCommander,
   onInspectCard,
-  onExportPng,
-  onOpenTableQr,
 }: DeckWorkspaceProps) {
   const [groupMode, setGroupMode] = useState<DeckGroupMode>('role');
   const [showConsidering, setShowConsidering] = useState(true);
   const [showPrimerNotes, setShowPrimerNotes] = useState(() =>
     Boolean(deck.description && deck.description.trim().length > 0),
   );
-  const [isExportingPng, setIsExportingPng] = useState(false);
+  const [visibilityMenuOpen, setVisibilityMenuOpen] = useState(false);
+  const visibilityMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const handleExportPng = async () => {
-    if (isExportingPng) return;
-    setIsExportingPng(true);
-    try {
-      if (onExportPng) {
-        await onExportPng();
-      } else {
-        await downloadDeckSnapshotPng(deck, analytics, totalDeckPriceUsd);
+  useEffect(() => {
+    if (!visibilityMenuOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (
+        visibilityMenuRef.current &&
+        !visibilityMenuRef.current.contains(e.target as Node)
+      ) {
+        setVisibilityMenuOpen(false);
       }
-    } catch {
-      // Ignore canvas export errors cleanly in restricted environments
-    } finally {
-      setIsExportingPng(false);
-    }
-  };
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setVisibilityMenuOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [visibilityMenuOpen]);
 
   const illegalSet = useMemo(
     () => new Set(analytics.illegalColorCardIds),
@@ -316,6 +314,8 @@ export function DeckWorkspace({
 
   const canPair = deck.commanders.length === 1 && canHaveSecondCommander(deck.commanders[0]!);
   const currentVisibility: DeckVisibility = deck.visibility ?? 'private';
+  const currentVisibilityLabel =
+    VISIBILITY_OPTIONS.find((opt) => opt.value === currentVisibility)?.label ?? 'Private';
   const visibilityHint = VISIBILITY_HINT_BY_VALUE[currentVisibility];
   const currentDescription = deck.description ?? '';
 
@@ -354,43 +354,64 @@ export function DeckWorkspace({
           </span>
 
           {onChangeVisibility && (
-            <label
-              title={visibilityHint}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-2.5 py-1 text-xs text-slate-300"
-            >
-              <span className="text-[11px] font-semibold text-slate-400">Visibility:</span>
-              <select
+            <div ref={visibilityMenuRef} className="relative inline-block">
+              <button
+                type="button"
                 aria-label="Deck visibility"
+                aria-haspopup="listbox"
+                aria-expanded={visibilityMenuOpen}
                 title={visibilityHint}
-                value={currentVisibility}
-                onChange={(e) => onChangeVisibility(e.target.value as DeckVisibility)}
-                className="bg-transparent font-semibold text-slate-100 outline-none"
+                onClick={() => setVisibilityMenuOpen((open) => !open)}
+                className="inline-flex min-w-[178px] cursor-pointer items-center justify-between gap-2 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-slate-300 transition hover:border-slate-500"
               >
-                {VISIBILITY_OPTIONS.map((opt) => (
-                  <option
-                    key={opt.value}
-                    value={opt.value}
-                    title={opt.hint}
-                    className="bg-slate-900 text-slate-100"
-                  >
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                  <span className="text-[11px] font-semibold text-slate-400">Visibility:</span>
+                  <span className="font-semibold text-slate-100">{currentVisibilityLabel}</span>
+                </span>
+                <ChevronDown
+                  className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${
+                    visibilityMenuOpen ? 'rotate-180 text-slate-200' : ''
+                  }`}
+                />
+              </button>
+
+              {visibilityMenuOpen && (
+                <div
+                  role="listbox"
+                  aria-label="Deck visibility options"
+                  className="absolute left-0 right-0 top-full z-30 mt-1 w-full overflow-hidden rounded-xl border border-slate-700 bg-slate-900 py-1 shadow-xl"
+                >
+                  {VISIBILITY_OPTIONS.map((opt) => {
+                    const selected = opt.value === currentVisibility;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        title={opt.hint}
+                        onClick={() => {
+                          onChangeVisibility(opt.value);
+                          setVisibilityMenuOpen(false);
+                        }}
+                        className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-xs transition ${
+                          selected
+                            ? 'bg-amber-500/15 font-semibold text-amber-200'
+                            : 'text-slate-200 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <span>{opt.label}</span>
+                        {selected && <Check className="h-3.5 w-3.5 shrink-0 text-amber-300" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <button
-            type="button"
-            onClick={() => onOpenDeckManager('decks')}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 font-semibold text-slate-200 transition hover:border-amber-400/50 hover:text-amber-200"
-          >
-            <FolderOpen className="h-3.5 w-3.5 text-amber-400" />
-            My Decks
-          </button>
-
           <button
             type="button"
             onClick={() => onOpenDeckManager('import-export')}
@@ -406,39 +427,7 @@ export function DeckWorkspace({
             className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 font-semibold text-slate-200 transition hover:border-violet-400/50 hover:text-violet-200"
           >
             <Share2 className="h-3.5 w-3.5 text-violet-400" />
-            Share Link
-          </button>
-
-          {onOpenTableQr && (
-            <button
-              type="button"
-              onClick={onOpenTableQr}
-              title="Show scannable LGS Table QR code"
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 font-semibold text-slate-200 transition hover:border-amber-400/50 hover:text-amber-200"
-            >
-              <QrCode className="h-3.5 w-3.5 text-amber-400" />
-              Table QR
-            </button>
-          )}
-
-          <button
-            type="button"
-            disabled={isExportingPng}
-            onClick={() => void handleExportPng()}
-            title="Download 1200x675 Ripple99 Deck Snapshot PNG"
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 font-semibold text-slate-200 transition hover:border-emerald-400/50 hover:text-emerald-200 disabled:opacity-50"
-          >
-            <ImageDown className="h-3.5 w-3.5 text-emerald-400" />
-            {isExportingPng ? 'Exporting...' : 'Export PNG'}
-          </button>
-
-          <button
-            type="button"
-            onClick={onBackToSearch}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-amber-500 px-3 py-1.5 font-semibold text-slate-950 transition hover:bg-amber-400"
-          >
-            <Search className="h-3.5 w-3.5" />
-            Browse Catalog
+            Share
           </button>
         </div>
       </section>
@@ -535,7 +524,7 @@ export function DeckWorkspace({
               className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500/20 px-2.5 py-1 font-semibold text-rose-100 ring-1 ring-rose-400/40 hover:bg-rose-500/30"
             >
               <ArrowLeftRight className="h-3.5 w-3.5" />
-              Move Off-Color Cards to Considering
+              Move Off-Color Cards to Maybeboard
             </button>
           )}
         </section>
@@ -621,11 +610,13 @@ export function DeckWorkspace({
                   className="flex cursor-pointer items-center gap-3 rounded-xl border border-amber-500/25 bg-slate-950/80 p-2.5 transition hover:border-amber-400/60"
                 >
                   {cmd.imageSmall && (
-                    <img
-                      src={cmd.imageSmall}
-                      alt={cmd.name}
-                      className="h-16 w-12 shrink-0 rounded-md object-cover"
-                    />
+                    <span className="mtg-card-corners h-16 w-12 shrink-0 overflow-hidden bg-slate-950">
+                      <img
+                        src={cmd.imageSmall}
+                        alt={cmd.name}
+                        className="h-full w-full scale-[1.015] object-cover"
+                      />
+                    </span>
                   )}
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-bold text-amber-100">{cmd.name}</div>
@@ -897,7 +888,7 @@ export function DeckWorkspace({
               Mainboard ({analytics.mainboardCount} / {deck.commanders.length > 0 ? 100 - deck.commanders.length : 99})
             </h2>
             <p className="text-xs text-slate-400">
-              Click a card to inspect full rules text & synergy tags, or stash cuts in Considering.
+              Click a card to inspect full rules text & synergy tags, or stash cuts in Maybeboard.
             </p>
           </div>
 
@@ -1024,8 +1015,8 @@ export function DeckWorkspace({
                           <button
                             type="button"
                             onClick={() => onMoveToSideboard(entry.card.id)}
-                            title="Move to Considering"
-                            aria-label={`Move ${entry.card.name} to Considering`}
+                            title="Move to Maybeboard"
+                            aria-label={`Move ${entry.card.name} to Maybeboard`}
                             className="rounded p-1 text-slate-400 hover:bg-violet-500/15 hover:text-violet-300"
                           >
                             <ArrowLeftRight className="h-3 w-3" />
@@ -1049,7 +1040,7 @@ export function DeckWorkspace({
         )}
       </section>
 
-      {/* Considering / Maybeboard Tray */}
+      {/* Maybeboard Tray */}
       <section className="rounded-2xl border border-slate-800 bg-slate-900/50">
         <button
           type="button"
@@ -1058,7 +1049,7 @@ export function DeckWorkspace({
         >
           <div className="flex items-center gap-2">
             <span className="text-sm font-bold text-slate-100">
-              Considering / Maybeboard ({analytics.sideboardCount})
+              Maybeboard ({analytics.sideboardCount})
             </span>
             <span className="text-xs text-slate-400">
               Excluded from 100-card count & mana curve
@@ -1075,7 +1066,7 @@ export function DeckWorkspace({
           <div className="border-t border-slate-800 p-4">
             {sideboardEntries.length === 0 ? (
               <p className="text-xs text-slate-500">
-                No cards in Considering yet. Use the swap button (⇄) on any card to bench it
+                No cards in Maybeboard yet. Use the swap button (⇄) on any card to bench it
                 while trimming your deck down to 100.
               </p>
             ) : (
@@ -1110,7 +1101,7 @@ export function DeckWorkspace({
                       <button
                         type="button"
                         onClick={() => onRemoveOneSideboard(entry.card.id)}
-                        aria-label={`Decrease Considering ${entry.card.name}`}
+                        aria-label={`Decrease Maybeboard ${entry.card.name}`}
                         className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
                       >
                         <Minus className="h-3 w-3" />
@@ -1118,7 +1109,7 @@ export function DeckWorkspace({
                       <button
                         type="button"
                         onClick={() => onAddToSideboard(entry.card)}
-                        aria-label={`Increase Considering ${entry.card.name}`}
+                        aria-label={`Increase Maybeboard ${entry.card.name}`}
                         className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
                       >
                         <Plus className="h-3 w-3" />
@@ -1126,7 +1117,7 @@ export function DeckWorkspace({
                       <button
                         type="button"
                         onClick={() => onDeleteSideboard(entry.card.id)}
-                        aria-label={`Delete ${entry.card.name} from Considering`}
+                        aria-label={`Delete ${entry.card.name} from Maybeboard`}
                         className="rounded p-1 text-slate-500 hover:bg-rose-500/15 hover:text-rose-300"
                       >
                         <Trash2 className="h-3 w-3" />

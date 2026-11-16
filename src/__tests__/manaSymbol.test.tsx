@@ -398,7 +398,6 @@ describe('ManaSymbol UI components & integrations', () => {
         onMoveIllegalToSideboard={() => {}}
         onQuickFilterRole={() => {}}
         onOpenDeckManager={() => {}}
-        onBackToSearch={() => {}}
         onChooseCommander={() => {}}
         onInspectCard={() => {}}
       />,

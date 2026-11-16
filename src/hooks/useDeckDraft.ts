@@ -579,7 +579,7 @@ export function useDeckDraft(options: UseDeckDraftOptions = {}): UseDeckDraftRet
           updatedAt: new Date().toISOString(),
         };
       });
-      setLastNotice({ message: `Added ${card.name} to Considering.` });
+      setLastNotice({ message: `Added ${card.name} to Maybeboard.` });
     },
     [applyUserEdit],
   );
@@ -645,7 +645,7 @@ export function useDeckDraft(options: UseDeckDraftOptions = {}): UseDeckDraftRet
         },
         { recomputeThemes: true },
       );
-      setLastNotice({ message: `Moved ${existing.card.name} to Considering.` });
+      setLastNotice({ message: `Moved ${existing.card.name} to Maybeboard.` });
     },
     [applyUserEdit, deck.mainboard],
   );
@@ -779,7 +779,7 @@ export function useDeckDraft(options: UseDeckDraftOptions = {}): UseDeckDraftRet
 
       if (moved > 0) {
         setLastNotice({
-          message: `Moved ${moved} off-color card${moved === 1 ? '' : 's'} to Considering.`,
+          message: `Moved ${moved} off-color card${moved === 1 ? '' : 's'} to Maybeboard.`,
         });
       }
       return moved;

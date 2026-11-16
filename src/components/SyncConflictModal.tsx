@@ -94,7 +94,7 @@ function buildSideSummaries(conflict: SyncConflict): {
       local: {
         name: localDeck.name,
         countLabel: `${localMainCount}/100 cards${
-          localSideCount > 0 ? ` · ${localSideCount} considering` : ''
+          localSideCount > 0 ? ` · ${localSideCount} maybeboard` : ''
         }`,
         updatedAt: localDeck.updatedAt,
         description: localDeck.description,
@@ -104,7 +104,7 @@ function buildSideSummaries(conflict: SyncConflict): {
       cloud: {
         name: cloudDeck.name,
         countLabel: `${cloudDeck.cardCount}/100 cards${
-          cloudSideCount > 0 ? ` · ${cloudSideCount} considering` : ''
+          cloudSideCount > 0 ? ` · ${cloudSideCount} maybeboard` : ''
         }`,
         updatedAt: cloudDeck.updatedAt,
         description: cloudDeck.description,

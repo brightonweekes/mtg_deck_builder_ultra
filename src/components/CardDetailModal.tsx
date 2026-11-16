@@ -18,8 +18,8 @@ import {
 import {
   canAddCardToDeck,
   canPairCommanders,
-  getMaxAllowedCopies,
 } from '../search/commanderRules.js';
+import { getSynergyReasonBadgeClass } from '../search/rippleEngine.js';
 import type { CompactCard, FunctionalRole } from '../types/card.js';
 import type { ScoredCardMatch } from '../types/search.js';
 import {
@@ -87,14 +87,6 @@ export function CardDetailModal({
   const displayName =
     flipped && faces.length > 1 && faces[1]?.name ? faces[1].name : card.name;
 
-  const maxCopies = getMaxAllowedCopies(card);
-  const copyLimitLabel =
-    maxCopies === Infinity
-      ? 'Unlimited'
-      : maxCopies > 1
-        ? `Up to ${maxCopies}`
-        : 'Singleton (1)';
-
   const addCheck = canAddCardToDeck(
     card,
     quantityInDeck,
@@ -143,12 +135,12 @@ export function CardDetailModal({
         <div className="grid flex-1 gap-5 overflow-y-auto p-5 md:grid-cols-[280px_1fr]">
           {/* Left Column: Art & Quick Controls */}
           <div className="flex flex-col gap-3">
-            <div className="relative aspect-[5/7] w-full overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
+            <div className="mtg-card-corners relative aspect-[5/7] w-full overflow-hidden border border-slate-800 bg-slate-950">
               {displayImage ? (
                 <img
                   src={displayImage}
                   alt={displayName}
-                  className="h-full w-full object-cover"
+                  className="h-full w-full scale-[1.015] object-cover"
                 />
               ) : (
                 <div className="flex h-full items-center justify-center p-4 text-center text-sm text-slate-400">
@@ -217,7 +209,13 @@ export function CardDetailModal({
                     type="button"
                     onClick={() => onAddCard(card)}
                     disabled={!addCheck.allowed}
-                    title={addCheck.allowed ? 'Add copy to deck' : addCheck.reason}
+                    title={
+                      addCheck.allowed
+                        ? 'Add copy to deck'
+                        : addCheck.reason === 'Singleton limit (1 copy)'
+                          ? undefined
+                          : addCheck.reason
+                    }
                     className={`inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition ${
                       quantityInDeck > 0
                         ? 'bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30 disabled:opacity-70'
@@ -231,7 +229,9 @@ export function CardDetailModal({
                         <Check className="h-3.5 w-3.5" />
                         {addCheck.allowed
                           ? `Add Another (${quantityInDeck} in deck)`
-                          : `In Deck (${quantityInDeck})`}
+                          : quantityInDeck === 1
+                            ? 'In Deck'
+                            : `In Deck (${quantityInDeck})`}
                       </>
                     ) : (
                       <>
@@ -243,9 +243,12 @@ export function CardDetailModal({
                 </div>
               )}
 
-              {!isCommander && !addCheck.allowed && addCheck.reason && (
-                <p className="text-[11px] text-rose-300">{addCheck.reason}</p>
-              )}
+              {!isCommander &&
+                !addCheck.allowed &&
+                addCheck.reason &&
+                addCheck.reason !== 'Singleton limit (1 copy)' && (
+                  <p className="text-[11px] text-rose-300">{addCheck.reason}</p>
+                )}
 
               {canPair && (
                 <button
@@ -270,16 +273,20 @@ export function CardDetailModal({
               )}
 
               <div className="flex items-center gap-1.5 pt-1">
-                {(card.themes.length > 0 || card.roles.length > 0) && (
+                {(card.themes.length > 0 ||
+                  card.roles.length > 0 ||
+                  card.oracleText.trim().length > 0 ||
+                  card.isCommanderEligible) && (
                   <button
                     type="button"
                     onClick={() => {
                       onFindSimilar(card);
                       onClose();
                     }}
-                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-violet-500/40 bg-violet-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-violet-200 transition hover:bg-violet-500/25"
+                    title="Build a Ripple Chain around this card (Starters, Payoffs & Hidden Gems)"
+                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-cyan-100 transition hover:bg-cyan-500/25"
                   >
-                    <Sparkles className="h-3.5 w-3.5" />
+                    <Sparkles className="h-3.5 w-3.5 text-cyan-300" />
                     Find Similar
                   </button>
                 )}
@@ -301,8 +308,8 @@ export function CardDetailModal({
           <div className="flex min-w-0 flex-col gap-4">
             {/* Key Metadata Badges */}
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <div className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-1 text-slate-300">
-                <span className="text-slate-500">Identity</span>
+              <div className="inline-flex items-center gap-1.5 rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-1 font-mono text-slate-300">
+                <span>Identity</span>
                 <ColorIdentityBadges colors={card.colorIdentity} size="xs" />
               </div>
 
@@ -318,10 +325,6 @@ export function CardDetailModal({
                 {card.edhrecRank !== null
                   ? `EDHREC #${card.edhrecRank.toLocaleString()}`
                   : 'Unranked'}
-              </span>
-
-              <span className="rounded-lg border border-slate-800 bg-slate-950 px-2.5 py-1 text-slate-300">
-                Copies: <strong className="text-slate-100">{copyLimitLabel}</strong>
               </span>
             </div>
 
@@ -350,7 +353,7 @@ export function CardDetailModal({
                 <div className="mb-1.5 flex items-center justify-between text-xs">
                   <span className="inline-flex items-center gap-1.5 font-semibold text-violet-200">
                     <Sparkles className="h-3.5 w-3.5" />
-                    Method A Synergy Match
+                    Ripple &amp; Synergy Match
                   </span>
                   <span className="rounded bg-violet-500/30 px-2 py-0.5 font-mono text-[11px] font-bold text-violet-100">
                     Score {synergyScore}
@@ -361,7 +364,7 @@ export function CardDetailModal({
                     {matchedReasons.map((reason) => (
                       <span
                         key={reason}
-                        className="rounded-md bg-violet-500/20 px-2 py-0.5 text-[11px] text-violet-100 ring-1 ring-violet-400/30"
+                        className={`rounded-md px-2 py-0.5 text-[11px] ${getSynergyReasonBadgeClass(reason)}`}
                       >
                         {reason}
                       </span>
@@ -374,7 +377,7 @@ export function CardDetailModal({
             {/* Oracle Text */}
             <div className="rounded-xl border border-slate-800 bg-slate-950/75 p-4">
               <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                Oracle Rules Text
+                Rules Text
               </h3>
               <OracleTextDisplay text={card.oracleText} />
             </div>

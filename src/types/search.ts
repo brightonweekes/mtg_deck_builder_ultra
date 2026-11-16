@@ -8,6 +8,7 @@ import type {
 
 export type ColorMatchMode = 'identity-lock' | 'exact' | 'include' | 'at-most';
 export type CmcOperator = '=' | '<=' | '>=' | '<' | '>';
+export type RippleMode = 'all' | 'enablers' | 'payoffs' | 'hidden-gems';
 export type SortOption =
   | 'edhrec'
   | 'synergy'
@@ -30,6 +31,10 @@ export interface SearchFilter {
   roles: FunctionalRole[];
   themes: string[];
   themeQuery: string;
+  rippleSeedIds: string[];
+  rippleMode: RippleMode;
+  rippleHookKey: string | null;
+  excludeCardIds: string[];
   commanderOnly: boolean;
   partnerType: PartnerCategory | null;
   maxPriceUsd: number | null;
@@ -51,6 +56,10 @@ export const DEFAULT_SEARCH_FILTER: SearchFilter = {
   roles: [],
   themes: [],
   themeQuery: '',
+  rippleSeedIds: [],
+  rippleMode: 'all',
+  rippleHookKey: null,
+  excludeCardIds: [],
   commanderOnly: false,
   partnerType: null,
   maxPriceUsd: null,

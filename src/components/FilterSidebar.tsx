@@ -159,12 +159,12 @@ export function FilterSidebar({
         </button>
       </div>
 
-      {/* 1. Method A Theme & Synergy Matcher */}
+      {/* 1. Mechanic & Theme Filters */}
       <section className="space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-violet-300">
             <Sparkles className="h-3.5 w-3.5" />
-            Method A Theme Matcher
+            Mechanic &amp; Theme Filters
           </h2>
           {filter.themeQuery && (
             <button

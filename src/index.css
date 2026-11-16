@@ -5,3 +5,7 @@
     color-scheme: dark;
   }
 }
+
+.mtg-card-corners {
+  border-radius: 5% / 3.6%;
+}

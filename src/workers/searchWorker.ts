@@ -45,6 +45,7 @@ export class SearchWorkerController {
   constructor(
     private readonly post: (message: WorkerResponseMessage) => void,
     private readonly catalogOps: WorkerCatalogOps = DEFAULT_CATALOG_OPS,
+    private readonly onReadyWarmup?: (engine: CardSearchEngine) => void,
   ) {}
 
   private respondToResolve(
@@ -139,6 +140,10 @@ export class SearchWorkerController {
           type: 'ONEOFF_SEARCH_RESULT',
           payload: nextEngine.search(req.filter, req.requestId),
         });
+      }
+
+      if (this.onReadyWarmup) {
+        this.onReadyWarmup(nextEngine);
       }
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -240,9 +245,17 @@ const workerScope = (
 ) as unknown as DedicatedWorkerGlobalScope | undefined;
 
 if (workerScope && typeof workerScope.postMessage === 'function') {
-  const controller = new SearchWorkerController((message) => {
-    workerScope.postMessage(message);
-  });
+  const controller = new SearchWorkerController(
+    (message) => {
+      workerScope.postMessage(message);
+    },
+    DEFAULT_CATALOG_OPS,
+    (readyEngine) => {
+      setTimeout(() => {
+        readyEngine.ensureRippleIndex();
+      }, 50);
+    },
+  );
   workerScope.onmessage = (event: MessageEvent<WorkerRequestMessage>) => {
     controller.handleMessage(event.data);
   };

@@ -163,11 +163,13 @@ export function SharedDeckBanner({
                         className="flex items-center gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5"
                       >
                         {cmd.imageSmall && (
-                          <img
-                            src={cmd.imageSmall}
-                            alt={cmd.name}
-                            className="h-12 w-9 shrink-0 rounded object-cover ring-1 ring-amber-400/40"
-                          />
+                          <span className="mtg-card-corners h-12 w-9 shrink-0 overflow-hidden bg-slate-950 ring-1 ring-amber-400/40">
+                            <img
+                              src={cmd.imageSmall}
+                              alt={cmd.name}
+                              className="h-full w-full scale-[1.015] object-cover"
+                            />
+                          </span>
                         )}
                         <div className="min-w-0 flex-1">
                           <div className="truncate font-bold text-amber-100">{cmd.name}</div>

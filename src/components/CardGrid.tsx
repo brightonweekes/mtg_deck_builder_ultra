@@ -15,6 +15,7 @@ interface CardGridProps {
   onPageChange: (page: number) => void;
   onInspectCard: (match: ScoredCardMatch) => void;
   onAddCard: (card: CompactCard) => void;
+  onRemoveOneCard: (cardId: string) => void;
   onSetCommander: (card: CompactCard) => void;
   onAddPartner: (card: CompactCard) => void;
 }
@@ -85,6 +86,7 @@ export function CardGrid({
   onPageChange,
   onInspectCard,
   onAddCard,
+  onRemoveOneCard,
   onSetCommander,
   onAddPartner,
 }: CardGridProps) {
@@ -146,6 +148,7 @@ export function CardGrid({
               addBlockedReason={addCheck.reason}
               onInspect={onInspectCard}
               onAddCard={onAddCard}
+              onRemoveOneCard={onRemoveOneCard}
               onSetCommander={onSetCommander}
               onAddPartner={onAddPartner}
             />

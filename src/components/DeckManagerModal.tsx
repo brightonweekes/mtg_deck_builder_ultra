@@ -342,13 +342,32 @@ export function DeckManagerModal({
                       : (item.syncStatus ?? 'local');
                     const visBadge = VISIBILITY_BADGE_MAP[visibility];
                     const syncBadge = SYNC_BADGE_MAP[syncStatus];
+                    const handleLoadDeck = async () => {
+                      await onSwitchDeck(item.id);
+                      onClose();
+                    };
+
                     return (
                       <div
                         key={item.id}
-                        className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border p-3 ${
+                        role={isActive ? undefined : 'button'}
+                        tabIndex={isActive ? undefined : 0}
+                        aria-label={isActive ? undefined : `Load deck ${item.name}`}
+                        onClick={isActive ? undefined : () => void handleLoadDeck()}
+                        onKeyDown={
+                          isActive
+                            ? undefined
+                            : (e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  void handleLoadDeck();
+                                }
+                              }
+                        }
+                        className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border p-3 transition ${
                           isActive
                             ? 'border-amber-500/45 bg-amber-500/10'
-                            : 'border-slate-800 bg-slate-950/75'
+                            : 'cursor-pointer border-slate-800 bg-slate-950/75 hover:border-amber-400/50 hover:bg-slate-900/90'
                         }`}
                       >
                         <div className="min-w-0 flex-1">
@@ -379,21 +398,13 @@ export function DeckManagerModal({
                         </div>
 
                         <div className="flex items-center gap-1.5">
-                          {!isActive && (
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                await onSwitchDeck(item.id);
-                                onClose();
-                              }}
-                              className="rounded-lg bg-slate-800 px-3 py-1.5 font-semibold text-slate-100 hover:bg-amber-500 hover:text-slate-950"
-                            >
-                              Load
-                            </button>
-                          )}
                           <button
                             type="button"
-                            onClick={() => void onDeleteDeck(item.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void onDeleteDeck(item.id);
+                            }}
+                            onKeyDown={(e) => e.stopPropagation()}
                             aria-label={`Delete deck ${item.name}`}
                             className="rounded-lg border border-slate-800 bg-slate-900 p-1.5 text-slate-400 hover:border-rose-500/50 hover:text-rose-300"
                           >
@@ -677,7 +688,7 @@ export function DeckManagerModal({
                     Zero-Server Shareable URL (?d=...)
                   </h3>
                   <p className="mt-1 text-slate-300">
-                    Your entire deck (Commanders, Mainboard, and Considering) is binary-packed
+                    Your entire deck (Commanders, Mainboard, and Maybeboard) is binary-packed
                     directly into this URL so anyone can open and clone it with zero backend
                     database.
                   </p>

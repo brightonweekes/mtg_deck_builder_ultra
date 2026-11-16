@@ -1,6 +1,7 @@
-import { Check, Crown, FlipHorizontal2, Plus, Users } from 'lucide-react';
+import { Check, Crown, FlipHorizontal2, Minus, Plus, Users } from 'lucide-react';
 import { useState } from 'react';
 import { ROLE_BY_ID, THEME_BY_ID } from '../config/searchConfig.js';
+import { getSynergyReasonBadgeClass } from '../search/rippleEngine.js';
 import type { CompactCard } from '../types/card.js';
 import type { ViewMode } from '../types/deck.js';
 import type { ScoredCardMatch } from '../types/search.js';
@@ -16,6 +17,7 @@ interface CardTileProps {
   addBlockedReason?: string;
   onInspect: (match: ScoredCardMatch) => void;
   onAddCard: (card: CompactCard) => void;
+  onRemoveOneCard?: (cardId: string) => void;
   onSetCommander: (card: CompactCard) => void;
   onAddPartner: (card: CompactCard) => void;
 }
@@ -30,6 +32,7 @@ export function CardTile({
   addBlockedReason,
   onInspect,
   onAddCard,
+  onRemoveOneCard,
   onSetCommander,
   onAddPartner,
 }: CardTileProps) {
@@ -44,38 +47,69 @@ export function CardTile({
     flipped && card.faces && card.faces[1] ? card.faces[1].name : card.name;
 
   const renderActionButtons = (compact = false) => (
-    <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+    <div
+      className={`flex flex-wrap items-center ${compact ? 'gap-1' : 'gap-1.5'}`}
+      onClick={(e) => e.stopPropagation()}
+    >
       {isCommander ? (
         <span className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg bg-amber-500/20 px-2 py-1 text-[11px] font-semibold text-amber-200 ring-1 ring-amber-400/40">
           <Crown className="h-3 w-3" />
           Commander
         </span>
       ) : (
-        <button
-          type="button"
-          onClick={() => onAddCard(card)}
-          disabled={!canAddMore}
-          title={canAddMore ? 'Add to deck' : addBlockedReason}
-          className={`inline-flex flex-1 items-center justify-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold transition ${
-            quantityInDeck > 0
-              ? 'bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30 disabled:opacity-75'
-              : canAddMore
-                ? 'bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/35 hover:bg-amber-500/25'
-                : 'cursor-not-allowed bg-slate-800/80 text-slate-500 ring-1 ring-slate-700'
-          }`}
-        >
-          {quantityInDeck > 0 ? (
-            <>
-              <Check className="h-3 w-3" />
-              {canAddMore ? `+1 (${quantityInDeck})` : `In Deck (${quantityInDeck})`}
-            </>
-          ) : (
-            <>
-              <Plus className="h-3 w-3" />
-              {compact ? 'Add' : 'Add to Deck'}
-            </>
+        <div className="flex min-w-0 flex-1 items-center gap-1">
+          {quantityInDeck > 0 && onRemoveOneCard && (
+            <button
+              type="button"
+              onClick={() => onRemoveOneCard(card.id)}
+              aria-label="Remove one copy from deck"
+              title={quantityInDeck > 1 ? 'Remove one copy from deck' : 'Remove from deck'}
+              className={`inline-flex shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-900/95 text-slate-200 transition hover:border-rose-500/50 hover:bg-rose-500/15 hover:text-rose-200 ${
+                compact ? 'px-1.5 py-1' : 'px-2 py-1'
+              }`}
+            >
+              <Minus className="h-3 w-3" />
+            </button>
           )}
-        </button>
+
+          <button
+            type="button"
+            onClick={() => onAddCard(card)}
+            disabled={!canAddMore}
+            title={
+              canAddMore
+                ? 'Add to deck'
+                : addBlockedReason === 'Singleton limit (1 copy)'
+                  ? undefined
+                  : addBlockedReason
+            }
+            className={`inline-flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-lg py-1 text-[11px] font-semibold transition ${
+              compact ? 'px-1.5' : 'px-2'
+            } ${
+              quantityInDeck > 0
+                ? 'bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/40 hover:bg-emerald-500/30 disabled:opacity-75'
+                : canAddMore
+                  ? 'bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/35 hover:bg-amber-500/25'
+                  : 'cursor-not-allowed bg-slate-800/80 text-slate-500 ring-1 ring-slate-700'
+            }`}
+          >
+            {quantityInDeck > 0 ? (
+              <>
+                <Check className="h-3 w-3 shrink-0" />
+                {canAddMore
+                  ? `+1 (${quantityInDeck})`
+                  : quantityInDeck === 1
+                    ? 'In Deck'
+                    : `In Deck (${quantityInDeck})`}
+              </>
+            ) : (
+              <>
+                <Plus className="h-3 w-3 shrink-0" />
+                {compact ? 'Add' : 'Add to Deck'}
+              </>
+            )}
+          </button>
+        </div>
       )}
 
       {!isCommander && canAddAsPartner && (
@@ -110,13 +144,13 @@ export function CardTile({
         onClick={() => onInspect(match)}
         className="flex cursor-pointer flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/65 p-3 transition hover:border-amber-400/50 hover:bg-slate-900 sm:flex-row"
       >
-        <div className="relative aspect-[5/7] w-36 shrink-0 self-center overflow-hidden rounded-lg bg-slate-950 sm:self-start">
+        <div className="mtg-card-corners relative aspect-[5/7] w-36 shrink-0 self-center overflow-hidden bg-slate-950 sm:self-start">
           {displayImage ? (
             <img
               src={displayImage}
               alt={displayName}
               loading="lazy"
-              className="h-full w-full object-cover"
+              className="h-full w-full scale-[1.015] object-cover"
             />
           ) : (
             <div className="flex h-full items-center justify-center p-2 text-center text-xs text-slate-400">
@@ -167,7 +201,7 @@ export function CardTile({
               {matchedReasons.slice(0, 3).map((r) => (
                 <span
                   key={r}
-                  className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] text-violet-200 ring-1 ring-violet-500/30"
+                  className={`rounded px-1.5 py-0.5 text-[10px] ${getSynergyReasonBadgeClass(r)}`}
                 >
                   {r}
                 </span>
@@ -201,15 +235,15 @@ export function CardTile({
     return (
       <article
         onClick={() => onInspect(match)}
-        className="group relative cursor-pointer overflow-hidden rounded-lg border border-slate-800 bg-slate-950 transition hover:border-amber-400/60"
+        className="mtg-card-corners group relative cursor-pointer overflow-hidden border border-slate-800 bg-slate-950 transition hover:border-amber-400/60"
       >
-        <div className="relative aspect-[5/7] w-full">
+        <div className="mtg-card-corners relative aspect-[5/7] w-full overflow-hidden">
           {displayImage ? (
             <img
               src={displayImage}
               alt={displayName}
               loading="lazy"
-              className="h-full w-full object-cover"
+              className="h-full w-full scale-[1.015] object-cover"
             />
           ) : (
             <div className="flex h-full items-center justify-center p-2 text-center text-xs text-slate-400">
@@ -257,13 +291,13 @@ export function CardTile({
       onClick={() => onInspect(match)}
       className="group flex cursor-pointer flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/75 transition hover:border-amber-400/50 hover:bg-slate-900"
     >
-      <div className="relative aspect-[5/7] w-full overflow-hidden bg-slate-950">
+      <div className="mtg-card-corners relative aspect-[5/7] w-full overflow-hidden bg-slate-950">
         {displayImage ? (
           <img
             src={displayImage}
             alt={displayName}
             loading="lazy"
-            className="h-full w-full object-cover transition duration-200 group-hover:scale-[1.02]"
+            className="h-full w-full scale-[1.015] object-cover transition duration-200 group-hover:scale-[1.035]"
           />
         ) : (
           <div className="flex h-full items-center justify-center p-4 text-center text-xs text-slate-400">
@@ -325,7 +359,7 @@ export function CardTile({
             {matchedReasons.slice(0, 3).map((reason) => (
               <span
                 key={reason}
-                className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-200 ring-1 ring-violet-500/30"
+                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${getSynergyReasonBadgeClass(reason)}`}
               >
                 {reason}
               </span>

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { FileText, Grid2X2, LayoutGrid, X } from 'lucide-react';
 import { PARTNER_TYPE_LABELS, ROLE_BY_ID, THEME_BY_ID } from '../config/searchConfig.js';
+import { RIPPLE_MODE_META } from '../search/rippleEngine.js';
 import type { ViewMode } from '../types/deck.js';
 import type { SearchFilter, SearchResponsePayload, SortOption } from '../types/search.js';
 import { ColorIdentityBadges, ManaSymbolBadge } from './ManaSymbol.js';
@@ -38,6 +39,29 @@ export function ActiveFilterBar({
       key: 'query',
       label: `Search: "${filter.query}"`,
       onRemove: () => onUpdateFilter({ query: '' }),
+    });
+  }
+
+  if (filter.rippleSeedIds && filter.rippleSeedIds.length > 0) {
+    const modeLabel = RIPPLE_MODE_META[filter.rippleMode ?? 'all'].label;
+    chips.push({
+      key: 'ripple',
+      label: `Ripple: ${modeLabel}`,
+      onRemove: () =>
+        onUpdateFilter({
+          rippleSeedIds: [],
+          rippleMode: 'all',
+          rippleHookKey: null,
+          sortBy: 'edhrec',
+        }),
+    });
+  }
+
+  if (filter.excludeCardIds && filter.excludeCardIds.length > 0) {
+    chips.push({
+      key: 'excludeDeck',
+      label: 'Hiding Deck Cards',
+      onRemove: () => onUpdateFilter({ excludeCardIds: [] }),
     });
   }
 
@@ -171,11 +195,10 @@ export function ActiveFilterBar({
               <span className="font-semibold text-slate-100">
                 {searchResult.totalMatches.toLocaleString()}
               </span>{' '}
-              cards{' '}
-              <span className="font-mono text-slate-500">
-                ({searchResult.executionTimeMs.toFixed(1)} ms
-                {isSearching ? ' · updating...' : ''})
-              </span>
+              cards
+              {isSearching && (
+                <span className="font-mono text-slate-500"> (updating...)</span>
+              )}
             </>
           ) : (
             <span>Loading card database...</span>

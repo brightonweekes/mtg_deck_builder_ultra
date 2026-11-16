@@ -19,12 +19,12 @@ import { HeaderBar } from './components/HeaderBar.js';
 import { LegalFooter } from './components/LegalFooter.js';
 import { QuickDeckDrawer } from './components/QuickDeckDrawer.js';
 import { QuickStartBanner } from './components/QuickStartBanner.js';
+import { RippleChainBar } from './components/RippleChainBar.js';
 import { SharedDeckBanner } from './components/SharedDeckBanner.js';
 import { SyncConflictModal } from './components/SyncConflictModal.js';
 import { TableQrModal } from './components/TableQrModal.js';
 import { generateDeckId } from './db/deckDb.js';
 import { computeDeckAnalytics } from './deck/deckAnalytics.js';
-import { downloadDeckSnapshotPng } from './deck/deckCardExporter.js';
 import { decodeDeckFromUrlParam } from './deck/urlCodec.js';
 import { useCardSearch } from './hooks/useCardSearch.js';
 import { useCloudAuth } from './hooks/useCloudAuth.js';
@@ -35,14 +35,17 @@ import {
 import { useDeckDraft, type DeckActionNotice } from './hooks/useDeckDraft.js';
 import { useFriends } from './hooks/useFriends.js';
 import {
-  buildCommanderSynergyQuery,
   getChooseCommanderFilter,
   getCompatiblePartnerFilter,
 } from './search/commanderRules.js';
+import {
+  computeDeckChainBalance,
+  extractRippleProfile,
+} from './search/rippleEngine.js';
 import type { CompactCard, FunctionalRole, ManaColor } from './types/card.js';
 import type { CloudDeckRecord } from './types/cloud.js';
 import type { DeckCardEntry, DeckDraft, ViewMode, WorkspaceTab } from './types/deck.js';
-import type { ScoredCardMatch } from './types/search.js';
+import type { RippleMode, ScoredCardMatch } from './types/search.js';
 
 function stripUrlQueryParams(...keys: string[]): void {
   if (typeof window === 'undefined') return;
@@ -214,6 +217,8 @@ export function App() {
 
   const [commanderNamesById, setCommanderNamesById] = useState<Record<string, string>>({});
   const [cloudNotice, setCloudNotice] = useState<DeckActionNotice | null>(null);
+  const [rippleSeedCards, setRippleSeedCards] = useState<CompactCard[]>([]);
+  const [hideDeckCardsInRipple, setHideDeckCardsInRipple] = useState(false);
 
   const handledShareUrlRef = useRef(false);
   const handledCloudUrlRef = useRef(false);
@@ -225,6 +230,46 @@ export function App() {
   const openedFriendsForPendingRef = useRef(false);
 
   const analytics = useMemo(() => computeDeckAnalytics(deck), [deck]);
+
+  const deckMainboardCards = useMemo(
+    () => Object.values(deck.mainboard).map((entry) => entry.card),
+    [deck.mainboard],
+  );
+  const deckAllCardIds = useMemo(
+    () => [
+      ...deck.commanders.map((c) => c.id),
+      ...Object.keys(deck.mainboard),
+    ],
+    [deck.commanders, deck.mainboard],
+  );
+
+  const activeRippleSeeds = useMemo(() => {
+    const ids = filter.rippleSeedIds ?? [];
+    if (ids.length === 0) return [];
+    const byId = new Map<string, CompactCard>();
+    for (const c of deck.commanders) byId.set(c.id, c);
+    for (const c of rippleSeedCards) byId.set(c.id, c);
+    return ids.map((id) => byId.get(id)).filter((c): c is CompactCard => Boolean(c));
+  }, [deck.commanders, filter.rippleSeedIds, rippleSeedCards]);
+
+  const activeRippleProfile = useMemo(
+    () => (activeRippleSeeds.length > 0 ? extractRippleProfile(activeRippleSeeds) : null),
+    [activeRippleSeeds],
+  );
+
+  const deckChainBalance = useMemo(
+    () =>
+      activeRippleProfile
+        ? computeDeckChainBalance(activeRippleProfile, deckMainboardCards)
+        : null,
+    [activeRippleProfile, deckMainboardCards],
+  );
+
+  useEffect(() => {
+    if (!hideDeckCardsInRipple) return;
+    if ((filter.rippleSeedIds ?? []).length === 0) return;
+    updateFilter({ excludeCardIds: deckAllCardIds });
+  }, [deckAllCardIds, filter.rippleSeedIds, hideDeckCardsInRipple, updateFilter]);
 
   const cloudShareActive =
     Boolean(cloudAuth.user?.emailVerified) &&
@@ -528,10 +573,16 @@ export function App() {
       const nextIdentity = setCommander(card);
       if (nextIdentity === null) return;
 
+      setRippleSeedCards([card]);
       updateFilter({
         colorIdentity: deck.lockSearchToCommanderIdentity ? nextIdentity : filter.colorIdentity,
         commanderOnly: false,
         partnerType: null,
+        rippleSeedIds: [card.id],
+        rippleMode: 'all',
+        rippleHookKey: null,
+        themeQuery: '',
+        sortBy: 'synergy',
       });
     },
     [
@@ -547,15 +598,23 @@ export function App() {
       const nextIdentity = addPartnerCommander(card);
       if (nextIdentity === null) return;
 
+      const nextSeeds = [...deck.commanders.filter((c) => c.id !== card.id), card];
+      setRippleSeedCards(nextSeeds);
       updateFilter({
         colorIdentity: deck.lockSearchToCommanderIdentity ? nextIdentity : filter.colorIdentity,
         commanderOnly: false,
         partnerType: null,
         query: '',
+        rippleSeedIds: nextSeeds.map((c) => c.id),
+        rippleMode: 'all',
+        rippleHookKey: null,
+        themeQuery: '',
+        sortBy: 'synergy',
       });
     },
     [
       addPartnerCommander,
+      deck.commanders,
       deck.lockSearchToCommanderIdentity,
       filter.colorIdentity,
       updateFilter,
@@ -564,11 +623,19 @@ export function App() {
 
   const handleRemoveCommander = useCallback(
     (cardId: string) => {
-      const remainingCount = deck.commanders.filter((c) => c.id !== cardId).length;
+      const remaining = deck.commanders.filter((c) => c.id !== cardId);
       const nextIdentity = removeCommander(cardId);
-      syncFilterIdentity(nextIdentity, remainingCount > 0);
+      syncFilterIdentity(nextIdentity, remaining.length > 0);
+      if ((filter.rippleSeedIds ?? []).length > 0) {
+        setRippleSeedCards(remaining);
+        updateFilter({
+          rippleSeedIds: remaining.map((c) => c.id),
+          rippleHookKey: null,
+          ...(remaining.length === 0 ? { rippleMode: 'all', sortBy: 'edhrec' } : {}),
+        });
+      }
     },
-    [deck.commanders, removeCommander, syncFilterIdentity],
+    [deck.commanders, filter.rippleSeedIds, removeCommander, syncFilterIdentity, updateFilter],
   );
 
   const handleClearCommanders = useCallback(() => {
@@ -576,7 +643,17 @@ export function App() {
       removeCommander(cmd.id);
     }
     syncFilterIdentity(null, false);
-  }, [deck.commanders, removeCommander, syncFilterIdentity]);
+    if ((filter.rippleSeedIds ?? []).length > 0) {
+      setRippleSeedCards([]);
+      updateFilter({
+        rippleSeedIds: [],
+        rippleMode: 'all',
+        rippleHookKey: null,
+        excludeCardIds: [],
+        sortBy: 'edhrec',
+      });
+    }
+  }, [deck.commanders, filter.rippleSeedIds, removeCommander, syncFilterIdentity, updateFilter]);
 
   const handleToggleIdentityLock = useCallback(
     (locked: boolean) => {
@@ -598,14 +675,26 @@ export function App() {
   const handleClearDeck = useCallback(() => {
     clearDeck();
     syncFilterIdentity(null, false);
-  }, [clearDeck, syncFilterIdentity]);
+    setRippleSeedCards([]);
+    setHideDeckCardsInRipple(false);
+    updateFilter({
+      rippleSeedIds: [],
+      rippleMode: 'all',
+      rippleHookKey: null,
+      excludeCardIds: [],
+      sortBy: 'edhrec',
+    });
+  }, [clearDeck, syncFilterIdentity, updateFilter]);
 
   const handleMatchCommanderSynergy = useCallback(() => {
     if (deck.commanders.length === 0) return;
-    const synergyQuery = buildCommanderSynergyQuery(deck.commanders);
+    setRippleSeedCards(deck.commanders);
     updateFilter({
-      themeQuery: synergyQuery,
-      sortBy: synergyQuery ? 'synergy' : filter.sortBy,
+      rippleSeedIds: deck.commanders.map((c) => c.id),
+      rippleMode: 'all',
+      rippleHookKey: null,
+      themeQuery: '',
+      sortBy: 'synergy',
       themes: [],
       roles: [],
       commanderOnly: false,
@@ -620,7 +709,6 @@ export function App() {
     deck.commanders,
     deck.lockSearchToCommanderIdentity,
     filter.colorIdentity,
-    filter.sortBy,
     updateFilter,
   ]);
 
@@ -632,6 +720,8 @@ export function App() {
 
     updateFilter({
       ...patch,
+      rippleSeedIds: [],
+      rippleHookKey: null,
       colorIdentity: null,
     });
     setActiveTab('search');
@@ -648,10 +738,13 @@ export function App() {
 
   const handleFindSimilar = useCallback(
     (card: CompactCard) => {
-      const synergyQuery = buildCommanderSynergyQuery([card]);
+      setRippleSeedCards([card]);
       updateFilter({
-        themeQuery: synergyQuery,
-        sortBy: synergyQuery ? 'synergy' : filter.sortBy,
+        rippleSeedIds: [card.id],
+        rippleMode: 'all',
+        rippleHookKey: null,
+        themeQuery: '',
+        sortBy: 'synergy',
         themes: [],
         roles: [],
         commanderOnly: false,
@@ -659,7 +752,7 @@ export function App() {
       });
       setActiveTab('search');
     },
-    [filter.sortBy, updateFilter],
+    [updateFilter],
   );
 
   const handleQuickFilterRole = useCallback(
@@ -691,11 +784,14 @@ export function App() {
     (card: CompactCard) => {
       const nextIdentity = setCommander(card);
       if (nextIdentity === null) return;
-      const synergyQuery = buildCommanderSynergyQuery([card]);
+      setRippleSeedCards([card]);
       updateFilter(
         {
-          themeQuery: synergyQuery,
-          sortBy: synergyQuery ? 'synergy' : filter.sortBy,
+          rippleSeedIds: [card.id],
+          rippleMode: 'all',
+          rippleHookKey: null,
+          themeQuery: '',
+          sortBy: 'synergy',
           themes: [],
           roles: [],
           commanderOnly: false,
@@ -711,11 +807,47 @@ export function App() {
     [
       deck.lockSearchToCommanderIdentity,
       filter.colorIdentity,
-      filter.sortBy,
       setCommander,
       updateFilter,
     ],
   );
+
+  const handleRippleModeChange = useCallback(
+    (nextMode: RippleMode) => {
+      updateFilter({ rippleMode: nextMode, page: 1 });
+    },
+    [updateFilter],
+  );
+
+  const handleRippleHookChange = useCallback(
+    (nextHookKey: string | null) => {
+      updateFilter({ rippleHookKey: nextHookKey, page: 1 });
+    },
+    [updateFilter],
+  );
+
+  const handleToggleHideDeckCardsInRipple = useCallback(
+    (hide: boolean) => {
+      setHideDeckCardsInRipple(hide);
+      updateFilter({
+        excludeCardIds: hide ? deckAllCardIds : [],
+        page: 1,
+      });
+    },
+    [deckAllCardIds, updateFilter],
+  );
+
+  const handleClearRipple = useCallback(() => {
+    setRippleSeedCards([]);
+    setHideDeckCardsInRipple(false);
+    updateFilter({
+      rippleSeedIds: [],
+      rippleMode: 'all',
+      rippleHookKey: null,
+      excludeCardIds: [],
+      sortBy: 'edhrec',
+    });
+  }, [updateFilter]);
 
   const handleFilterByRole = useCallback(
     (role: FunctionalRole) => {
@@ -754,6 +886,8 @@ export function App() {
   );
 
   const handleResetFilters = useCallback(() => {
+    setRippleSeedCards([]);
+    setHideDeckCardsInRipple(false);
     resetFilters();
     if (deck.lockSearchToCommanderIdentity && deck.commanders.length > 0) {
       updateFilter({ colorIdentity: combinedColorIdentity });
@@ -909,7 +1043,6 @@ export function App() {
           commanders={deck.commanders}
           totalDeckCards={totalCardCount}
           syncStatus={syncStatus}
-          searchResult={searchResult}
           cloudUser={cloudAuth.user}
           cloudProfile={cloudAuth.profile}
           cloudSyncStatus={cloudSync.overallSyncStatus}
@@ -925,7 +1058,6 @@ export function App() {
           onMatchCommanderSynergy={handleMatchCommanderSynergy}
           onFindPartner={handleFindPartner}
           onClearCommanders={handleClearCommanders}
-          onForceResync={forceResync}
         />
 
       {/* IndexedDB Sync Progress / Error Banner */}
@@ -986,6 +1118,21 @@ export function App() {
             />
 
             <main className="min-w-0 flex-1 space-y-3">
+              {activeRippleProfile && (
+                <RippleChainBar
+                  profile={activeRippleProfile}
+                  mode={filter.rippleMode ?? 'all'}
+                  activeHookKey={filter.rippleHookKey ?? null}
+                  hideDeckCards={hideDeckCardsInRipple}
+                  deckCardCount={deckMainboardCards.length}
+                  deckBalance={deckChainBalance}
+                  onSelectMode={handleRippleModeChange}
+                  onSelectHook={handleRippleHookChange}
+                  onToggleHideDeckCards={handleToggleHideDeckCardsInRipple}
+                  onClearRipple={handleClearRipple}
+                />
+              )}
+
               <ActiveFilterBar
                 filter={filter}
                 searchResult={searchResult}
@@ -1006,6 +1153,7 @@ export function App() {
                 onPageChange={handlePageChange}
                 onInspectCard={setInspectedMatch}
                 onAddCard={addCard}
+                onRemoveOneCard={removeOneCard}
                 onSetCommander={handleSetCommander}
                 onAddPartner={handleAddPartner}
               />
@@ -1040,18 +1188,8 @@ export function App() {
           }
           onQuickFilterRole={handleQuickFilterRole}
           onOpenDeckManager={(t) => setDeckManagerTab(t)}
-          onBackToSearch={() => setActiveTab('search')}
           onChooseCommander={handleChooseCommander}
           onInspectCard={handleInspectRawCard}
-          onOpenTableQr={cloudShareActive ? () => setTableQrOpen(true) : undefined}
-          onExportPng={
-            cloudShareActive && cloudShareUrl
-              ? () =>
-                  downloadDeckSnapshotPng(deck, analytics, totalDeckPriceUsd, {
-                    shareUrl: cloudShareUrl,
-                  }).then(() => undefined)
-              : undefined
-          }
         />
       )}
 

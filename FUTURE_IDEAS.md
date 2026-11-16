@@ -43,13 +43,13 @@ V1 uses **Local-First storage** (`IndexedDB` auto-save + compressed shareable de
 
 ---
 
-## 3. High-Impact Commander Features (Phase 2 & 3 Differentiators)
+## 3. High-Impact Commander Features (Deferred Beyond Phase 3)
 
-### Trigger ↔ Enabler ↔ Payoff Synergy Engine
+> **Phase 3 Update:** **Ripple Chains** (*Trigger ↔ Enabler ↔ Payoff* directional engine with `Starters`, `Payoffs`, and `Hidden Gems ≤ $5`) shipped in Phase 3 via [`src/search/rippleEngine.ts`](./src/search/rippleEngine.ts) and [`RippleChainBar.tsx`](./src/components/RippleChainBar.tsx). To keep Ripple99 simple and focused, the remaining differentiators below (`1,000-Hand Monte Carlo Simulator`, `Commander-Tempo Curve Audit`, `Bracket (1–4) Evaluator`, and `Budget Swap Finder`) stay here in Future Ideas.
+
+### ~~Trigger ↔ Enabler ↔ Payoff Synergy Engine~~ *(Shipped as Ripple Chains in Phase 3)*
 * **Concept:** Goes beyond generic popularity lists (like EDHREC) by analyzing *cause-and-effect* mechanics between your Commander and the 99.
-* **How it works:** Parses your Commander's Oracle text into **Triggers** (e.g., *"Whenever you sacrifice a permanent"*), **Costs/Requirements**, and **Outputs** (e.g., *"draw a card"*, *"put a +1/+1 counter"*). It then surfaces dedicated tabs for:
-  * **Enablers:** Cards that reliably trigger your Commander (e.g., Treasure makers, free sacrifice outlets, recursive bodies).
-  * **Payoffs:** Cards that multiply or reward your Commander's output (e.g., +1/+1 counter doublers, draw-trigger pings).
+* **Shipped Implementation:** Parses Commanders (and Partner pairs or non-commander `"Find Similar"` cards) into directional bitmasks and interactive filters for **`All Synergies`**, **`Starters`**, **`Payoffs`**, and **`Hidden Gems`** (`≤ $5`).
   * **"Hidden Gems" Toggle:** Surfaces cards with high mechanical synergy score, low EDHREC usage/rank, and budget-friendly USD prices.
 
 ### 1,000-Hand Monte Carlo Opening Hand & Mulligan Simulator

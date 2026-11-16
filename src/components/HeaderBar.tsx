@@ -13,14 +13,13 @@ import {
   Sparkles,
   Users,
   X,
-  Zap,
 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { canHaveSecondCommander, getCombinedColorIdentity } from '../search/commanderRules.js';
 import type { CompactCard } from '../types/card.js';
 import type { CloudUser, SyncStatus, UserProfile } from '../types/cloud.js';
 import type { WorkspaceTab } from '../types/deck.js';
-import type { SearchResponsePayload, SyncStatusPayload } from '../types/search.js';
+import type { SyncStatusPayload } from '../types/search.js';
 import { ColorIdentityBadges } from './ManaSymbol.js';
 import { Ripple99Logo } from './Ripple99Logo.js';
 
@@ -32,7 +31,6 @@ interface HeaderBarProps {
   commanders: readonly CompactCard[];
   totalDeckCards: number;
   syncStatus: SyncStatusPayload;
-  searchResult: SearchResponsePayload | null;
   cloudUser?: CloudUser | null;
   cloudProfile?: UserProfile | null;
   cloudSyncStatus?: SyncStatus;
@@ -48,7 +46,6 @@ interface HeaderBarProps {
   onMatchCommanderSynergy: () => void;
   onFindPartner: () => void;
   onClearCommanders: () => void;
-  onForceResync: () => void;
 }
 
 export function HeaderBar({
@@ -59,7 +56,6 @@ export function HeaderBar({
   commanders,
   totalDeckCards,
   syncStatus,
-  searchResult,
   cloudUser = null,
   cloudProfile = null,
   cloudSyncStatus = 'local',
@@ -75,7 +71,6 @@ export function HeaderBar({
   onMatchCommanderSynergy,
   onFindPartner,
   onClearCommanders,
-  onForceResync,
 }: HeaderBarProps) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -182,7 +177,7 @@ export function HeaderBar({
           )}
         </div>
 
-        {/* Right Actions: Commander Pill, Deck Drawer, Telemetry */}
+        {/* Right Actions: Commander Pill, Deck Drawer */}
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {commanders.length > 0 && (
             <div className="flex items-center gap-2 rounded-xl border border-amber-500/35 bg-amber-500/10 px-2.5 py-1 text-xs">
@@ -195,11 +190,11 @@ export function HeaderBar({
               <button
                 type="button"
                 onClick={onMatchCommanderSynergy}
-                title="Load Commander themes into Method A Synergy Matcher"
-                className="inline-flex items-center gap-1 rounded-md bg-violet-500/25 px-2 py-0.5 text-[11px] font-medium text-violet-200 ring-1 ring-violet-400/40 transition hover:bg-violet-500/35"
+                title="Explore Ripple Chains — Starters, Payoffs & Hidden Gems"
+                className="inline-flex items-center gap-1 rounded-md bg-cyan-500/20 px-2 py-0.5 text-[11px] font-medium text-cyan-100 ring-1 ring-cyan-400/40 transition hover:bg-cyan-500/30"
               >
-                <Sparkles className="h-3 w-3" />
-                <span className="hidden xl:inline">Synergy</span>
+                <Sparkles className="h-3 w-3 text-cyan-300" />
+                <span className="hidden xl:inline">Ripple</span>
               </button>
 
               {canPair && (
@@ -383,28 +378,6 @@ export function HeaderBar({
               </button>
             );
           })()}
-
-          {/* Compact Telemetry Pill */}
-          <div className="hidden items-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900/90 px-2.5 py-1 text-[11px] text-slate-300 xl:inline-flex">
-            <Zap
-              className={`h-3.5 w-3.5 ${
-                syncStatus.fromCache ? 'text-emerald-400' : 'text-sky-400'
-              }`}
-            />
-            <span className="font-mono">
-              {syncStatus.loadTimeMs !== undefined ? `${syncStatus.loadTimeMs}ms` : '...'}
-              {searchResult ? ` · ${searchResult.executionTimeMs.toFixed(1)}ms` : ''}
-            </span>
-            <button
-              type="button"
-              onClick={onForceResync}
-              disabled={!isReady && syncStatus.stage !== 'error'}
-              title="Re-sync IndexedDB card catalog"
-              className="ml-0.5 rounded p-0.5 text-slate-400 hover:bg-slate-800 hover:text-amber-300 disabled:opacity-40"
-            >
-              <RefreshCw className={`h-3 w-3 ${!isReady ? 'animate-spin' : ''}`} />
-            </button>
-          </div>
         </div>
       </div>
 

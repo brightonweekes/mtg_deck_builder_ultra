@@ -1,6 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { hasAuthReturnIntent, hasCloudUrlIntent } from '../App.js';
+import { ActiveFilterBar } from '../components/ActiveFilterBar.js';
+import { CardDetailModal } from '../components/CardDetailModal.js';
+import { CardTile } from '../components/CardTile.js';
 import {
   addUpgradeCardToAuditDraft,
   auditRoleTargets,
@@ -21,6 +26,7 @@ import {
   SAMPLE_COMMANDERS,
 } from '../components/QuickStartBanner.js';
 import { Ripple99Logo } from '../components/Ripple99Logo.js';
+import { SharedDeckBanner } from '../components/SharedDeckBanner.js';
 import { computeDeckAnalytics, ROLE_TARGETS } from '../deck/deckAnalytics.js';
 import type { SyncCatalogResult } from '../db/cardDb.js';
 import { buildEmptySearchResponse } from '../hooks/useCardSearch.js';
@@ -100,14 +106,12 @@ describe('Ripple99 Growth Batch 1 UI & Helpers', () => {
       commanders: [],
       totalDeckCards: 0,
       syncStatus: READY_SYNC,
-      searchResult: null,
       onOpenMobileFilters: () => {},
       onOpenDeckDrawer: () => {},
       onOpenDeckManager: () => {},
       onMatchCommanderSynergy: () => {},
       onFindPartner: () => {},
       onClearCommanders: () => {},
-      onForceResync: () => {},
     };
 
     const withAuditHtml = renderToStaticMarkup(
@@ -118,6 +122,8 @@ describe('Ripple99 Growth Batch 1 UI & Helpers', () => {
     expect(withAuditHtml).toContain('Build Decks, Not Piles');
     expect(withAuditHtml).not.toContain('Commander Builder Ultra');
     expect(withAuditHtml).toContain('>Audit<');
+    expect(withAuditHtml).not.toContain('Re-sync IndexedDB card catalog');
+    expect(withAuditHtml).not.toContain('14ms');
 
     const withoutAuditHtml = renderToStaticMarkup(<HeaderBar {...baseProps} />);
     expect(withoutAuditHtml).not.toContain('>Audit<');
@@ -325,18 +331,19 @@ describe('Ripple99 Growth Batch 1 UI & Helpers', () => {
     expect(reportHtml).toContain('Audit Current Deck');
   });
 
-  it('renders Export PNG buttons in DeckWorkspace and DeckManagerModal Share tab', () => {
+  it('renders Share in DeckWorkspace (omitting Export PNG and Table QR) and keeps Export PNG in DeckManagerModal Share tab', () => {
     const deck = makeDeck({ name: 'Export Button Test' });
     const analytics = computeDeckAnalytics(deck);
 
     const workspaceHtml = renderToStaticMarkup(
       <DeckWorkspace
-        deck={deck}
+        deck={{ ...deck, visibility: 'public' }}
         analytics={analytics}
         totalDeckPriceUsd={0}
         combinedColorIdentity={[]}
         basicLands={{}}
         onRenameDeck={() => {}}
+        onChangeVisibility={() => {}}
         onRemoveCommander={() => {}}
         onToggleIdentityLock={() => {}}
         onMatchSynergy={() => {}}
@@ -353,13 +360,19 @@ describe('Ripple99 Growth Batch 1 UI & Helpers', () => {
         onMoveIllegalToSideboard={() => {}}
         onQuickFilterRole={() => {}}
         onOpenDeckManager={() => {}}
-        onBackToSearch={() => {}}
         onChooseCommander={() => {}}
         onInspectCard={() => {}}
       />,
     );
-    expect(workspaceHtml).toContain('Share Link');
-    expect(workspaceHtml).toContain('Export PNG');
+    expect(workspaceHtml).toContain('>Share</button>');
+    expect(workspaceHtml).toContain('aria-label="Deck visibility"');
+    expect(workspaceHtml).toContain('Visibility:');
+    expect(workspaceHtml).toContain('Public');
+    expect(workspaceHtml).not.toContain('My Decks');
+    expect(workspaceHtml).not.toContain('Browse Catalog');
+    expect(workspaceHtml).not.toContain('Share Link');
+    expect(workspaceHtml).not.toContain('Export PNG');
+    expect(workspaceHtml).not.toContain('Table QR');
 
     const managerShareHtml = renderToStaticMarkup(
       <DeckManagerModal
@@ -585,45 +598,8 @@ describe('Ripple99 Growth Batch 1 UI & Helpers', () => {
     expect(filterAuditUpgradeMatches([{ card: upgradeCard, synergyScore: 68, matchedReasons: [] }], updatedDraft)).toEqual([]);
   });
 
-  it('renders Table QR buttons only for online/unlisted cloud-shareable decks and keeps DeckWorkspace clean when omitted', () => {
+  it('renders Table QR buttons only for online/unlisted cloud-shareable decks in DeckManagerModal', () => {
     const deck = makeDeck({ name: 'Fixture Brew' });
-    const analytics = computeDeckAnalytics(deck);
-
-    const workspaceBaseProps = {
-      deck,
-      analytics,
-      totalDeckPriceUsd: 0,
-      combinedColorIdentity: [] as ManaColor[],
-      basicLands: {},
-      onRenameDeck: () => {},
-      onRemoveCommander: () => {},
-      onToggleIdentityLock: () => {},
-      onMatchSynergy: () => {},
-      onFindPartner: () => {},
-      onAddCard: () => {},
-      onRemoveOneCard: () => {},
-      onDeleteCard: () => {},
-      onMoveToSideboard: () => {},
-      onMoveToMainboard: () => {},
-      onAddToSideboard: () => {},
-      onRemoveOneSideboard: () => {},
-      onDeleteSideboard: () => {},
-      onAutoFillBasics: () => {},
-      onMoveIllegalToSideboard: () => {},
-      onQuickFilterRole: () => {},
-      onOpenDeckManager: () => {},
-      onBackToSearch: () => {},
-      onChooseCommander: () => {},
-      onInspectCard: () => {},
-    };
-
-    const workspaceWithQr = renderToStaticMarkup(
-      <DeckWorkspace {...workspaceBaseProps} onOpenTableQr={() => {}} />,
-    );
-    expect(workspaceWithQr).toContain('Table QR');
-
-    const workspaceWithoutQr = renderToStaticMarkup(<DeckWorkspace {...workspaceBaseProps} />);
-    expect(workspaceWithoutQr).not.toContain('Table QR');
 
     const verifiedCloudUser = {
       uid: 'uid-1',
@@ -876,5 +852,287 @@ describe('Ripple99 Growth Batch 1 UI & Helpers', () => {
     if (recoveredOneOff?.type === 'ONEOFF_SEARCH_RESULT') {
       expect(recoveredOneOff.payload.matches.map((m) => m.card.id)).toEqual(['budget-spell']);
     }
+  });
+
+  it('renders CardDetailModal with Rules Text and EDHREC rank while omitting Copies badge and singleton limit warning', () => {
+    const commandTower = makeCard({
+      id: 'command-tower',
+      name: 'Command Tower',
+      typeLine: 'Land',
+      oracleText: "{T}: Add one mana of any color in your commander's color identity.",
+      cmc: 0,
+      priceUsd: 0.32,
+      edhrecRank: 2,
+    });
+
+    const inDeckHtml = renderToStaticMarkup(
+      <CardDetailModal
+        match={{ card: commandTower, synergyScore: 0, matchedReasons: [] }}
+        commanders={[]}
+        enforceColorIdentity={false}
+        quantityInDeck={1}
+        isCommander={false}
+        onClose={() => {}}
+        onAddCard={() => {}}
+        onRemoveOneCard={() => {}}
+        onSetCommander={() => {}}
+        onAddPartner={() => {}}
+        onFilterByRole={() => {}}
+        onFilterByTheme={() => {}}
+        onFindSimilar={() => {}}
+      />,
+    );
+
+    expect(inDeckHtml).toContain('Rules Text');
+    expect(inDeckHtml).not.toContain('Oracle Rules Text');
+    expect(inDeckHtml).not.toContain('Copies:');
+    expect(inDeckHtml).not.toContain('Singleton (1)');
+    expect(inDeckHtml).toContain('EDHREC #2');
+    expect(inDeckHtml).toContain('In Deck');
+    expect(inDeckHtml).not.toContain('In Deck (1)');
+    expect(inDeckHtml).not.toContain('Singleton limit (1 copy)');
+
+    for (const viewMode of ['standard', 'compact', 'detailed'] as const) {
+      const tileInDeckHtml = renderToStaticMarkup(
+        <CardTile
+          match={{ card: commandTower, synergyScore: 0, matchedReasons: [] }}
+          viewMode={viewMode}
+          quantityInDeck={1}
+          isCommander={false}
+          canAddAsPartner={false}
+          canAddMore={false}
+          addBlockedReason="Singleton limit (1 copy)"
+          onInspect={() => {}}
+          onAddCard={() => {}}
+          onRemoveOneCard={() => {}}
+          onSetCommander={() => {}}
+          onAddPartner={() => {}}
+        />,
+      );
+      expect(tileInDeckHtml).toContain('In Deck');
+      expect(tileInDeckHtml).toContain('aria-label="Remove one copy from deck"');
+      expect(tileInDeckHtml).not.toContain('In Deck (1)');
+      expect(tileInDeckHtml).not.toContain('Singleton limit (1 copy)');
+    }
+  });
+
+  it('renders ActiveFilterBar Showing X of Y cards without executionTimeMs telemetry', () => {
+    const html = renderToStaticMarkup(
+      <ActiveFilterBar
+        filter={DEFAULT_SEARCH_FILTER}
+        searchResult={{
+          requestId: 1,
+          matches: [],
+          totalMatches: 81,
+          page: 1,
+          pageSize: 60,
+          totalPages: 2,
+          executionTimeMs: 6.5,
+        }}
+        isSearching={false}
+        viewMode="standard"
+        onViewModeChange={() => {}}
+        onUpdateFilter={() => {}}
+        onResetFilters={() => {}}
+      />,
+    );
+
+    expect(html).toContain('Showing');
+    expect(html).toContain('81');
+    expect(html).toContain('cards');
+    expect(html).not.toContain('6.5 ms');
+    expect(html).not.toContain('ms)');
+  });
+
+  it('renders clickable deck rows without a separate Load button in DeckManagerModal Decks tab', () => {
+    const activeDeck = makeDeck({ id: 'deck-active', name: 'Active Brew' });
+    const inactiveDeck = makeDeck({ id: 'deck-other', name: 'Other Brew' });
+
+    const html = renderToStaticMarkup(
+      <DeckManagerModal
+        open
+        initialTab="decks"
+        activeDeck={activeDeck}
+        savedDecks={[
+          {
+            id: activeDeck.id,
+            name: activeDeck.name,
+            commanderIds: [],
+            mainboard: {},
+            sideboard: {},
+            createdAt: activeDeck.createdAt,
+            updatedAt: activeDeck.updatedAt,
+          },
+          {
+            id: inactiveDeck.id,
+            name: inactiveDeck.name,
+            commanderIds: [],
+            mainboard: {},
+            sideboard: {},
+            createdAt: inactiveDeck.createdAt,
+            updatedAt: inactiveDeck.updatedAt,
+          },
+        ]}
+        resolveCards={noopResolveCards}
+        onClose={() => {}}
+        onCreateNewDeck={async () => {}}
+        onSwitchDeck={async () => {}}
+        onDuplicateCurrentDeck={async () => {}}
+        onDeleteDeck={async () => {}}
+        onImportDeckDraft={() => {}}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Load deck Other Brew"');
+    expect(html).not.toContain('aria-label="Load deck Active Brew"');
+    expect(html).not.toContain('>Load</button>');
+  });
+
+  it('clips card corners proportionally across CardTile modes, CardDetailModal, DeckWorkspace, and SharedDeckBanner', () => {
+    const css = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8');
+    expect(css).toContain('.mtg-card-corners');
+    expect(css).toContain('border-radius: 5% / 3.6%');
+
+    const rats = makeCard({
+      id: 'relentless-rats',
+      name: 'Relentless Rats',
+      imageNormal: 'https://cards.scryfall.io/normal/front/a/2/a25-rats.jpg',
+      imageSmall: 'https://cards.scryfall.io/small/front/a/2/a25-rats.jpg',
+      maxCopies: null,
+    });
+    const cmd = makeCard({
+      id: 'vren',
+      name: 'Vren, the Relentless',
+      isCommanderEligible: true,
+      imageNormal: 'https://cards.scryfall.io/normal/front/b/l/blb-vren.jpg',
+      imageSmall: 'https://cards.scryfall.io/small/front/b/l/blb-vren.jpg',
+      faces: [
+        {
+          name: 'Vren Front',
+          manaCost: '{2}{U}{B}',
+          typeLine: 'Legendary Creature — Rat Rogue',
+          oracleText: 'Ward {2}',
+          imageNormal: 'https://cards.scryfall.io/normal/front/b/l/blb-vren.jpg',
+          imageSmall: 'https://cards.scryfall.io/small/front/b/l/blb-vren.jpg',
+        },
+        {
+          name: 'Vren Back',
+          manaCost: '',
+          typeLine: 'Legendary Creature',
+          oracleText: '',
+          imageNormal: 'https://cards.scryfall.io/normal/back/b/l/blb-vren.jpg',
+          imageSmall: 'https://cards.scryfall.io/small/back/b/l/blb-vren.jpg',
+        },
+      ],
+    });
+    const noImage = makeCard({ id: 'no-img', name: 'Placeholder Card', imageNormal: '', imageSmall: '' });
+
+    for (const viewMode of ['standard', 'compact', 'detailed'] as const) {
+      for (const card of [rats, cmd, noImage]) {
+        const tileHtml = renderToStaticMarkup(
+          <CardTile
+            match={{ card, synergyScore: 0, matchedReasons: [] }}
+            viewMode={viewMode}
+            quantityInDeck={card.id === 'relentless-rats' ? 3 : 0}
+            isCommander={false}
+            canAddAsPartner={false}
+            canAddMore
+            onInspect={() => {}}
+            onAddCard={() => {}}
+            onRemoveOneCard={() => {}}
+            onSetCommander={() => {}}
+            onAddPartner={() => {}}
+          />,
+        );
+        expect(tileHtml).toContain('mtg-card-corners');
+        if (card.imageNormal) {
+          expect(tileHtml).toContain('scale-[1.015]');
+        }
+      }
+    }
+
+    const modalHtml = renderToStaticMarkup(
+      <CardDetailModal
+        match={{ card: rats, synergyScore: 0, matchedReasons: [] }}
+        commanders={[]}
+        enforceColorIdentity={false}
+        quantityInDeck={1}
+        isCommander={false}
+        onClose={() => {}}
+        onAddCard={() => {}}
+        onRemoveOneCard={() => {}}
+        onSetCommander={() => {}}
+        onAddPartner={() => {}}
+        onFilterByRole={() => {}}
+        onFilterByTheme={() => {}}
+        onFindSimilar={() => {}}
+      />,
+    );
+    expect(modalHtml).toContain('mtg-card-corners');
+    expect(modalHtml).toContain('scale-[1.015]');
+
+    const deck = makeDeck({ name: 'Rat Colony', commanders: [cmd] });
+    const workspaceHtml = renderToStaticMarkup(
+      <DeckWorkspace
+        deck={deck}
+        analytics={computeDeckAnalytics(deck)}
+        totalDeckPriceUsd={0}
+        combinedColorIdentity={['U', 'B']}
+        basicLands={{}}
+        onRenameDeck={() => {}}
+        onRemoveCommander={() => {}}
+        onToggleIdentityLock={() => {}}
+        onMatchSynergy={() => {}}
+        onFindPartner={() => {}}
+        onAddCard={() => {}}
+        onRemoveOneCard={() => {}}
+        onDeleteCard={() => {}}
+        onMoveToSideboard={() => {}}
+        onMoveToMainboard={() => {}}
+        onAddToSideboard={() => {}}
+        onRemoveOneSideboard={() => {}}
+        onDeleteSideboard={() => {}}
+        onAutoFillBasics={() => {}}
+        onMoveIllegalToSideboard={() => {}}
+        onQuickFilterRole={() => {}}
+        onOpenDeckManager={() => {}}
+        onChooseCommander={() => {}}
+        onInspectCard={() => {}}
+      />,
+    );
+    expect(workspaceHtml).toContain('mtg-card-corners');
+    expect(workspaceHtml).toContain('scale-[1.015]');
+
+    const sharedHtml = renderToStaticMarkup(
+      <SharedDeckBanner
+        sharedDeck={{
+          id: 'shared-1',
+          ownerUid: 'uid-1',
+          ownerHandle: 'ratking',
+          name: 'Rat Deck',
+          description: '',
+          visibility: 'public',
+          sharedWithUids: [],
+          commanderOracleIds: ['vren'],
+          colorIdentity: ['U', 'B'],
+          mainboard: {},
+          sideboard: {},
+          synergyThemes: [],
+          cardCount: 100,
+          lockSearchToCommanderIdentity: true,
+          revision: 1,
+          createdAt: '2026-11-16T00:00:00.000Z',
+          updatedAt: '2026-11-16T00:00:00.000Z',
+          deletedAt: null,
+        }}
+        commanders={[cmd]}
+        loading={false}
+        error={null}
+        onCloneIntoStudio={() => {}}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(sharedHtml).toContain('mtg-card-corners');
+    expect(sharedHtml).toContain('scale-[1.015]');
   });
 });

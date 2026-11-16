@@ -391,8 +391,8 @@ export function QuickDeckDrawer({
                             <button
                               type="button"
                               onClick={() => onMoveToSideboard(entry.card.id)}
-                              title="Move to Considering"
-                              aria-label={`Move ${entry.card.name} to Considering`}
+                              title="Move to Maybeboard"
+                              aria-label={`Move ${entry.card.name} to Maybeboard`}
                               className="rounded p-1 text-slate-400 hover:bg-violet-500/15 hover:text-violet-300"
                             >
                               <ArrowLeftRight className="h-3 w-3" />
@@ -415,11 +415,11 @@ export function QuickDeckDrawer({
             </div>
           )}
 
-          {/* Considering / Maybeboard List */}
+          {/* Maybeboard List */}
           {sideboardCardCount > 0 && (
             <section className="rounded-xl border border-violet-500/30 bg-violet-950/15">
               <header className="flex items-center justify-between border-b border-violet-500/20 px-3 py-2 text-xs font-semibold text-violet-200">
-                <span>Considering / Maybeboard</span>
+                <span>Maybeboard</span>
                 <span className="rounded bg-violet-500/20 px-1.5 py-0.5 font-mono text-[11px]">
                   {sideboardCardCount}
                 </span>
@@ -455,7 +455,7 @@ export function QuickDeckDrawer({
                         <button
                           type="button"
                           onClick={() => onDeleteSideboard(entry.card.id)}
-                          aria-label={`Delete ${entry.card.name} from Considering`}
+                          aria-label={`Delete ${entry.card.name} from Maybeboard`}
                           className="rounded p-1 text-slate-500 hover:bg-rose-500/15 hover:text-rose-300"
                         >
                           <Trash2 className="h-3 w-3" />
