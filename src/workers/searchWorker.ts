@@ -37,6 +37,7 @@ function createEmptySearchResult(requestId: number, filter: SearchFilter): Searc
 export class SearchWorkerController {
   private engine: CardSearchEngine | null = null;
   private isInitializing = false;
+  private hasInitError = false;
   private pendingSearch: { requestId: number; filter: SearchFilter } | null = null;
   private pendingOneOffSearches: Array<{ requestId: number; filter: SearchFilter }> = [];
   private pendingResolves: Array<{ requestId: number; ids?: string[]; names?: string[] }> = [];
@@ -64,6 +65,7 @@ export class SearchWorkerController {
   async initializeCatalog(baseUrl?: string, forceRefresh = false): Promise<void> {
     if (this.isInitializing) return;
     this.isInitializing = true;
+    this.hasInitError = false;
     const initStart = performance.now();
 
     try {
@@ -92,6 +94,8 @@ export class SearchWorkerController {
 
       const nextEngine = new CardSearchEngine(syncResult.cards);
       this.engine = nextEngine;
+      this.hasInitError = false;
+      this.isInitializing = false;
       const totalLoadMs = Math.max(1, Math.round(performance.now() - initStart));
 
       this.post({
@@ -138,6 +142,9 @@ export class SearchWorkerController {
       }
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
+      this.isInitializing = false;
+      this.hasInitError = true;
+      this.pendingSearch = null;
       this.pendingResolves = [];
       const failedOneOffs = this.pendingOneOffSearches;
       this.pendingOneOffSearches = [];
@@ -164,14 +171,23 @@ export class SearchWorkerController {
   handleMessage(msg: WorkerRequestMessage): void {
     switch (msg.type) {
       case 'INIT':
+        this.hasInitError = false;
         void this.initializeCatalog(msg.baseUrl, false);
         break;
       case 'FORCE_RESYNC':
         this.engine = null;
+        this.hasInitError = false;
         void this.initializeCatalog(msg.baseUrl, true);
         break;
       case 'SEARCH':
         if (!this.engine) {
+          if (!this.isInitializing && this.hasInitError) {
+            this.post({
+              type: 'SEARCH_RESULT',
+              payload: createEmptySearchResult(msg.requestId, msg.filter),
+            });
+            return;
+          }
           this.pendingSearch = { requestId: msg.requestId, filter: msg.filter };
           return;
         }
@@ -182,6 +198,13 @@ export class SearchWorkerController {
         break;
       case 'ONEOFF_SEARCH':
         if (!this.engine) {
+          if (!this.isInitializing && this.hasInitError) {
+            this.post({
+              type: 'ONEOFF_SEARCH_RESULT',
+              payload: createEmptySearchResult(msg.requestId, msg.filter),
+            });
+            return;
+          }
           this.pendingOneOffSearches.push({ requestId: msg.requestId, filter: msg.filter });
           return;
         }

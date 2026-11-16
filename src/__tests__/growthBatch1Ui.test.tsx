@@ -772,12 +772,17 @@ describe('Ripple99 Growth Batch 1 UI & Helpers', () => {
       expect(immediateRes.payload.matches.map((m) => m.card.id)).toEqual(['budget-token']);
     }
 
-    // Error recovery: queued ONEOFF_SEARCH flushes with empty result on catalog init failure
+    // Error recovery: queued ONEOFF_SEARCH flushes with empty result on catalog init failure,
+    // and subsequent ONEOFF_SEARCH / SEARCH calls after init failure resolve immediately without hanging.
+    let shouldFailSync = true;
     const failedPosts: WorkerResponseMessage[] = [];
     const failingController = new SearchWorkerController((msg) => failedPosts.push(msg), {
       clearCache: async () => {},
       syncCatalog: async () => {
-        throw new Error('Network offline');
+        if (shouldFailSync) {
+          throw new Error('Network offline');
+        }
+        return { cards: sampleCards, manifest, fromCache: false, loadTimeMs: 5 };
       },
     });
     failingController.handleMessage({ type: 'INIT' });
@@ -792,6 +797,54 @@ describe('Ripple99 Growth Batch 1 UI & Helpers', () => {
     if (emptyOneOff?.type === 'ONEOFF_SEARCH_RESULT') {
       expect(emptyOneOff.payload.requestId).toBe(99);
       expect(emptyOneOff.payload.matches).toEqual([]);
+    }
+
+    // Subsequent searches arriving while in failed init state reply immediately with empty results
+    failingController.handleMessage({
+      type: 'ONEOFF_SEARCH',
+      requestId: 100,
+      filter: DEFAULT_SEARCH_FILTER,
+    });
+    failingController.handleMessage({
+      type: 'SEARCH',
+      requestId: 101,
+      filter: DEFAULT_SEARCH_FILTER,
+    });
+    const postErrorOneOff = failedPosts.find(
+      (m) => m.type === 'ONEOFF_SEARCH_RESULT' && m.payload.requestId === 100,
+    );
+    const postErrorSearch = failedPosts.find(
+      (m) => m.type === 'SEARCH_RESULT' && m.payload.requestId === 101,
+    );
+    expect(postErrorOneOff?.type).toBe('ONEOFF_SEARCH_RESULT');
+    if (postErrorOneOff?.type === 'ONEOFF_SEARCH_RESULT') {
+      expect(postErrorOneOff.payload.matches).toEqual([]);
+    }
+    expect(postErrorSearch?.type).toBe('SEARCH_RESULT');
+    if (postErrorSearch?.type === 'SEARCH_RESULT') {
+      expect(postErrorSearch.payload.matches).toEqual([]);
+    }
+
+    // FORCE_RESYNC resets hasInitError so queued ONEOFF_SEARCH resolves cleanly once retry succeeds
+    shouldFailSync = false;
+    failingController.handleMessage({ type: 'FORCE_RESYNC' });
+    failingController.handleMessage({
+      type: 'ONEOFF_SEARCH',
+      requestId: 102,
+      filter: {
+        ...DEFAULT_SEARCH_FILTER,
+        themeQuery: 'spellslinger',
+        maxPriceUsd: 1,
+        sortBy: 'synergy',
+      },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    const recoveredOneOff = failedPosts.find(
+      (m) => m.type === 'ONEOFF_SEARCH_RESULT' && m.payload.requestId === 102,
+    );
+    expect(recoveredOneOff?.type).toBe('ONEOFF_SEARCH_RESULT');
+    if (recoveredOneOff?.type === 'ONEOFF_SEARCH_RESULT') {
+      expect(recoveredOneOff.payload.matches.map((m) => m.card.id)).toEqual(['budget-spell']);
     }
   });
 });
