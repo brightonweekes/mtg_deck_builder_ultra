@@ -234,6 +234,7 @@ describe('Milestone 5 deployment readiness & Cloudflare Pages compliance', () =>
     expect(updateWorkflow).toContain("cron: '0 4 * * *'");
     expect(updateWorkflow).toContain('contents: write');
     expect(updateWorkflow).toContain('CLOUDFLARE_DEPLOY_HOOK_URL');
+    expect(updateWorkflow).toContain('public/data/commanders-og.json');
 
     const routesPath = path.join(ROOT_DIR, 'public', '_routes.json');
     expect(existsSync(routesPath)).toBe(true);
