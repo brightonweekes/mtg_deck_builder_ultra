@@ -1,5 +1,7 @@
 import {
+  ArrowRightLeft,
   Check,
+  Coins,
   Crown,
   ExternalLink,
   FlipHorizontal2,
@@ -9,19 +11,26 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   PARTNER_TYPE_LABELS,
   ROLE_BY_ID,
   THEME_BY_ID,
 } from '../config/searchConfig.js';
+import { isBasicLandCard } from '../search/budgetSwapEngine.js';
 import {
   canAddCardToDeck,
   canPairCommanders,
+  getCombinedColorIdentity,
 } from '../search/commanderRules.js';
 import { getSynergyReasonBadgeClass } from '../search/rippleEngine.js';
 import type { CompactCard, FunctionalRole } from '../types/card.js';
-import type { ScoredCardMatch } from '../types/search.js';
+import type {
+  BudgetSwapCandidate,
+  BudgetSwapScanRequest,
+  BudgetSwapScanResponse,
+  ScoredCardMatch,
+} from '../types/search.js';
 import {
   ColorIdentityBadges,
   ManaCostDisplay,
@@ -34,6 +43,10 @@ interface CardDetailModalProps {
   enforceColorIdentity: boolean;
   quantityInDeck: number;
   isCommander: boolean;
+  excludeCardIds?: readonly string[];
+  findBudgetSwaps?: (req: BudgetSwapScanRequest) => Promise<BudgetSwapScanResponse>;
+  onSwapInDeck?: (outCardId: string, inCard: CompactCard) => boolean;
+  onInspectCard?: (card: CompactCard) => void;
   onClose: () => void;
   onAddCard: (card: CompactCard) => void;
   onRemoveOneCard: (cardId: string) => void;
@@ -50,6 +63,10 @@ export function CardDetailModal({
   enforceColorIdentity,
   quantityInDeck,
   isCommander,
+  excludeCardIds,
+  findBudgetSwaps,
+  onSwapInDeck,
+  onInspectCard,
   onClose,
   onAddCard,
   onRemoveOneCard,
@@ -60,10 +77,70 @@ export function CardDetailModal({
   onFindSimilar,
 }: CardDetailModalProps) {
   const [flipped, setFlipped] = useState(false);
+  const [showBudgetSwaps, setShowBudgetSwaps] = useState(false);
+  const [swapCapUsd, setSwapCapUsd] = useState<number>(2);
+  const [swapCandidates, setSwapCandidates] = useState<BudgetSwapCandidate[] | null>(null);
+  const [isLoadingSwaps, setIsLoadingSwaps] = useState(false);
+  const [swapNotice, setSwapNotice] = useState<string | null>(null);
+  const swapSeqRef = useRef(0);
+
+  const cardId = match?.card.id;
+  const cardPrice = match?.card.priceUsd ?? null;
 
   useEffect(() => {
     setFlipped(false);
-  }, [match?.card.id]);
+    setShowBudgetSwaps(false);
+    setSwapCandidates(null);
+    setIsLoadingSwaps(false);
+    setSwapNotice(null);
+    setSwapCapUsd(cardPrice !== null && cardPrice <= 2.5 ? 1 : 2);
+  }, [cardId, cardPrice]);
+
+  const effectiveIdentity = useMemo(() => {
+    if (!enforceColorIdentity || commanders.length === 0) return null;
+    return getCombinedColorIdentity(commanders);
+  }, [commanders, enforceColorIdentity]);
+
+  useEffect(() => {
+    if (!match || !showBudgetSwaps || !findBudgetSwaps) return;
+    const reqId = ++swapSeqRef.current;
+    let cancelled = false;
+    setIsLoadingSwaps(true);
+
+    void findBudgetSwaps({
+      targetCardIds: [match.card.id],
+      commanderIds: commanders.map((c) => c.id),
+      excludeCardIds: excludeCardIds ? [...excludeCardIds] : [],
+      colorIdentity: effectiveIdentity,
+      maxSwapPriceUsd: swapCapUsd,
+      perTargetLimit: 5,
+    })
+      .then((res) => {
+        if (cancelled || reqId !== swapSeqRef.current) return;
+        setSwapCandidates(res.results[0]?.suggestions ?? []);
+      })
+      .catch(() => {
+        if (cancelled || reqId !== swapSeqRef.current) return;
+        setSwapCandidates([]);
+      })
+      .finally(() => {
+        if (!cancelled && reqId === swapSeqRef.current) {
+          setIsLoadingSwaps(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    match,
+    showBudgetSwaps,
+    findBudgetSwaps,
+    commanders,
+    excludeCardIds,
+    effectiveIdentity,
+    swapCapUsd,
+  ]);
 
   useEffect(() => {
     if (!match) return;
@@ -99,6 +176,11 @@ export function CardDetailModal({
     canPairCommanders(commanders[0]!, card);
 
   const scryfallUrl = `https://scryfall.com/search?q=${encodeURIComponent(`!"${card.name}"`)}`;
+  const canShowBudgetSwaps =
+    Boolean(findBudgetSwaps) &&
+    card.priceUsd !== null &&
+    card.priceUsd >= 1.5 &&
+    !isBasicLandCard(card);
 
   return (
     <div
@@ -106,7 +188,7 @@ export function CardDetailModal({
       aria-modal="true"
       aria-label={card.name}
       onClick={onClose}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-sm sm:p-6"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-sm sm:p-6"
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -301,6 +383,21 @@ export function CardDetailModal({
                   <ExternalLink className="h-3 w-3" />
                 </a>
               </div>
+
+              {canShowBudgetSwaps && (
+                <button
+                  type="button"
+                  onClick={() => setShowBudgetSwaps((prev) => !prev)}
+                  className={`inline-flex w-full items-center justify-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition ${
+                    showBudgetSwaps
+                      ? 'border-emerald-400 bg-emerald-500/20 text-emerald-100'
+                      : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20'
+                  }`}
+                >
+                  <Coins className="h-3.5 w-3.5 text-emerald-300" />
+                  {showBudgetSwaps ? 'Hide Budget Alternatives' : 'Budget Alternatives'}
+                </button>
+              )}
             </div>
           </div>
 
@@ -369,6 +466,145 @@ export function CardDetailModal({
                         {reason}
                       </span>
                     ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Inline Budget Alternatives */}
+            {canShowBudgetSwaps && showBudgetSwaps && (
+              <div className="rounded-xl border border-emerald-500/35 bg-emerald-950/20 p-3 text-xs">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-200">
+                    <Coins className="h-3.5 w-3.5 text-emerald-300" />
+                    Budget Alternatives (&le; ${swapCapUsd})
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 5].map((cap) => (
+                      <button
+                        key={cap}
+                        type="button"
+                        onClick={() => setSwapCapUsd(cap)}
+                        className={`rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold transition ${
+                          swapCapUsd === cap
+                            ? 'border-emerald-400 bg-emerald-500/25 text-emerald-100'
+                            : 'border-slate-700 bg-slate-950 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        &le; ${cap}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {swapNotice && (
+                  <p className="mb-2 rounded-lg bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-200">
+                    {swapNotice}
+                  </p>
+                )}
+
+                {isLoadingSwaps || swapCandidates === null ? (
+                  <div className="space-y-1.5">
+                    {Array.from({ length: 3 }).map((_, idx) => (
+                      <div
+                        key={idx}
+                        className="h-11 animate-pulse rounded-lg border border-slate-800 bg-slate-950/70"
+                      />
+                    ))}
+                  </div>
+                ) : swapCandidates.length === 0 ? (
+                  <p className="text-[11px] text-slate-400">
+                    No close same-job replacement found at &le; ${swapCapUsd}.00
+                    {swapCapUsd < 5 ? ' — try raising the cap to ≤ $5.' : '.'}
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {swapCandidates.map((cand) => {
+                      const canSwapInDeck = quantityInDeck > 0 && !isCommander && Boolean(onSwapInDeck);
+                      const addEligible = canAddCardToDeck(
+                        cand.card,
+                        0,
+                        commanders,
+                        enforceColorIdentity,
+                      ).allowed;
+
+                      return (
+                        <div
+                          key={cand.card.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/85 px-2.5 py-2"
+                        >
+                          <div className="min-w-0 flex-1 space-y-0.5">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {onInspectCard ? (
+                                <button
+                                  type="button"
+                                  onClick={() => onInspectCard(cand.card)}
+                                  className="truncate font-semibold text-slate-100 hover:text-amber-200"
+                                >
+                                  {cand.card.name}
+                                </button>
+                              ) : (
+                                <span className="truncate font-semibold text-slate-100">
+                                  {cand.card.name}
+                                </span>
+                              )}
+                              <ManaCostDisplay manaCost={cand.card.manaCost} size="xs" />
+                              <span className="font-mono text-[10px] font-bold text-emerald-300">
+                                ${cand.card.priceUsd?.toFixed(2)}
+                              </span>
+                              {cand.savingsUsd > 0 && (
+                                <span className="rounded bg-emerald-500/15 px-1 py-0.5 font-mono text-[10px] text-emerald-200">
+                                  -${cand.savingsUsd.toFixed(2)}
+                                </span>
+                              )}
+                            </div>
+                            {cand.reasons.length > 0 && (
+                              <div className="flex flex-wrap gap-1">
+                                {cand.reasons.slice(0, 3).map((r) => (
+                                  <span
+                                    key={r}
+                                    className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300"
+                                  >
+                                    {r}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {canSwapInDeck ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const ok = onSwapInDeck!(card.id, cand.card);
+                                if (ok) {
+                                  setSwapNotice(
+                                    `Swapped ${card.name} → ${cand.card.name}.`,
+                                  );
+                                }
+                              }}
+                              className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-emerald-500/20 px-2.5 py-1 text-[11px] font-bold text-emerald-200 ring-1 ring-emerald-400/40 transition hover:bg-emerald-500 hover:text-slate-950"
+                            >
+                              <ArrowRightLeft className="h-3 w-3" />
+                              Swap in Deck
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={!addEligible}
+                              onClick={() => {
+                                onAddCard(cand.card);
+                                setSwapNotice(`Added ${cand.card.name} to deck.`);
+                              }}
+                              className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-amber-500/20 px-2.5 py-1 text-[11px] font-bold text-amber-200 ring-1 ring-amber-400/40 transition hover:bg-amber-500 hover:text-slate-950 disabled:opacity-40"
+                            >
+                              <Plus className="h-3 w-3" />
+                              Add
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

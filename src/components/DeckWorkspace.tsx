@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Coins,
   Crown,
   FileText,
   Lock,
@@ -31,6 +32,7 @@ import {
   type ManaPoolColor,
 } from '../deck/deckAnalytics.js';
 import { canAddCardToDeck, canHaveSecondCommander } from '../search/commanderRules.js';
+import { isBasicLandCard } from '../search/budgetSwapEngine.js';
 import type { CompactCard, FunctionalRole, ManaColor } from '../types/card.js';
 import type { DeckVisibility } from '../types/cloud.js';
 import type { DeckCardEntry, DeckDraft, DeckGroupMode } from '../types/deck.js';
@@ -79,6 +81,7 @@ interface DeckWorkspaceProps {
   onMoveIllegalToSideboard: () => void;
   onQuickFilterRole: (role: FunctionalRole | 'lands') => void;
   onOpenDeckManager: (tab: 'decks' | 'import-export' | 'share') => void;
+  onOpenBudgetSwaps?: (targetCardId?: string | null) => void;
   onChooseCommander: () => void;
   onInspectCard: (card: CompactCard) => void;
 }
@@ -206,6 +209,7 @@ export function DeckWorkspace({
   onMoveIllegalToSideboard,
   onQuickFilterRole,
   onOpenDeckManager,
+  onOpenBudgetSwaps,
   onChooseCommander,
   onInspectCard,
 }: DeckWorkspaceProps) {
@@ -412,6 +416,19 @@ export function DeckWorkspace({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs">
+          {onOpenBudgetSwaps && (
+            <button
+              type="button"
+              disabled={analytics.mainboardCount === 0}
+              onClick={() => onOpenBudgetSwaps(null)}
+              title="Find cheaper same-job alternatives for expensive cards in your 99"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-1.5 font-semibold text-emerald-200 transition hover:bg-emerald-500/25 disabled:opacity-40"
+            >
+              <Coins className="h-3.5 w-3.5 text-emerald-300" />
+              Budget Swaps
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => onOpenDeckManager('import-export')}
@@ -988,11 +1005,25 @@ export function DeckWorkspace({
                           <ManaCostDisplay manaCost={entry.card.manaCost} size="xs" />
                         </span>
 
-                        <span className="w-12 shrink-0 text-right font-mono text-[11px] text-slate-400">
-                          {entry.card.priceUsd !== null
-                            ? `$${(entry.card.priceUsd * entry.quantity).toFixed(2)}`
-                            : '—'}
-                        </span>
+                        {onOpenBudgetSwaps &&
+                        entry.card.priceUsd !== null &&
+                        entry.card.priceUsd >= 2 &&
+                        !isBasicLandCard(entry.card) ? (
+                          <button
+                            type="button"
+                            onClick={() => onOpenBudgetSwaps(entry.card.id)}
+                            title={`Find budget swaps for ${entry.card.name}`}
+                            className="w-12 shrink-0 text-right font-mono text-[11px] font-semibold text-slate-300 underline decoration-emerald-400/50 decoration-dotted underline-offset-2 hover:text-emerald-300"
+                          >
+                            ${(entry.card.priceUsd * entry.quantity).toFixed(2)}
+                          </button>
+                        ) : (
+                          <span className="w-12 shrink-0 text-right font-mono text-[11px] text-slate-400">
+                            {entry.card.priceUsd !== null
+                              ? `$${(entry.card.priceUsd * entry.quantity).toFixed(2)}`
+                              : '—'}
+                          </span>
+                        )}
 
                         <div className="flex shrink-0 items-center gap-0.5">
                           <button

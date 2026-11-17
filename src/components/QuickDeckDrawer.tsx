@@ -2,6 +2,7 @@ import {
   ArrowLeftRight,
   ArrowUpRight,
   CheckCircle2,
+  Coins,
   Crown,
   FolderOpen,
   LayoutDashboard,
@@ -41,6 +42,7 @@ interface QuickDeckDrawerProps {
   onMatchSynergy: () => void;
   onOpenFullWorkspace: () => void;
   onOpenDeckManager: () => void;
+  onOpenBudgetSwaps?: () => void;
   onInspectCard: (card: CompactCard) => void;
 }
 
@@ -90,6 +92,7 @@ export function QuickDeckDrawer({
   onMatchSynergy,
   onOpenFullWorkspace,
   onOpenDeckManager,
+  onOpenBudgetSwaps,
   onInspectCard,
 }: QuickDeckDrawerProps) {
   const [confirmClear, setConfirmClear] = useState(false);
@@ -191,9 +194,25 @@ export function QuickDeckDrawer({
                   <ColorIdentityBadges colors={combinedColorIdentity} size="xs" />
                 )}
               </div>
-              <span className="font-mono text-slate-300">
-                Est. ${totalDeckPriceUsd.toFixed(2)}
-              </span>
+              <div className="flex items-center gap-2">
+                {onOpenBudgetSwaps && totalCardCount > deck.commanders.length && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onOpenBudgetSwaps();
+                    }}
+                    title="Find cheaper swaps for expensive cards in your 99"
+                    className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-200 transition hover:bg-emerald-500/25"
+                  >
+                    <Coins className="h-3 w-3" />
+                    Budget Swaps
+                  </button>
+                )}
+                <span className="font-mono text-slate-300">
+                  Est. ${totalDeckPriceUsd.toFixed(2)}
+                </span>
+              </div>
             </div>
 
             <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">

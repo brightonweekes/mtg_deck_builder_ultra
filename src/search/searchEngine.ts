@@ -12,10 +12,17 @@ import {
   type ManaColor,
 } from '../types/card.js';
 import type {
+  BudgetSwapScanRequest,
+  BudgetSwapScanResponse,
   ScoredCardMatch,
   SearchFilter,
   SearchResponsePayload,
 } from '../types/search.js';
+import {
+  buildBudgetSwapIndex,
+  findBudgetSwapsForTargets,
+  type BudgetSwapIndex,
+} from './budgetSwapEngine.js';
 import {
   buildMergedRippleProfile,
   buildRippleIndex,
@@ -605,6 +612,9 @@ export class CardSearchEngine {
   private cardByName: Map<string, CompactCard> | null = null;
   private frontFaceByName: Map<string, CompactCard> | null = null;
   private rippleIndex: RippleIndex | null = null;
+  private budgetSwapIndex: BudgetSwapIndex | null = null;
+  private cardIdxById: Map<string, number> | null = null;
+  private cardIdxByOracleId: Map<string, number> | null = null;
   private singleNameLookups = 0;
 
   constructor(cards: readonly CompactCard[]) {
@@ -768,6 +778,58 @@ export class CardSearchEngine {
       this.subtypesLowers,
     );
     return this.rippleIndex;
+  }
+
+  private ensureBudgetSwapMaps(): {
+    swapIndex: BudgetSwapIndex;
+    idToIndex: Map<string, number>;
+    oracleToIndex: Map<string, number>;
+  } {
+    const rIdx = this.ensureRippleIndex();
+    if (!this.budgetSwapIndex) {
+      this.budgetSwapIndex = buildBudgetSwapIndex(this.cards, rIdx);
+    }
+    if (!this.cardIdxById || !this.cardIdxByOracleId) {
+      const idMap = new Map<string, number>();
+      const oMap = new Map<string, number>();
+      for (let i = 0; i < this.cards.length; i++) {
+        const c = this.cards[i]!;
+        idMap.set(c.id, i);
+        if (c.oracleId && !oMap.has(c.oracleId)) oMap.set(c.oracleId, i);
+      }
+      this.cardIdxById = idMap;
+      this.cardIdxByOracleId = oMap;
+    }
+    return {
+      swapIndex: this.budgetSwapIndex,
+      idToIndex: this.cardIdxById,
+      oracleToIndex: this.cardIdxByOracleId,
+    };
+  }
+
+  /**
+   * Finds cheaper same-job card substitutions across the full catalog using cached
+   * functional & Ripple bitmasks cleanly without altering active catalog filters.
+   */
+  findBudgetSwaps(request: BudgetSwapScanRequest, requestId = 0): BudgetSwapScanResponse {
+    const start = performance.now();
+    const rIdx = this.ensureRippleIndex();
+    const { swapIndex, idToIndex, oracleToIndex } = this.ensureBudgetSwapMaps();
+    const results = findBudgetSwapsForTargets(
+      this.cards,
+      request,
+      rIdx,
+      swapIndex,
+      this.typeLineLowers,
+      idToIndex,
+      oracleToIndex,
+    );
+    const executionTimeMs = Math.round((performance.now() - start) * 100) / 100;
+    return {
+      requestId,
+      results,
+      executionTimeMs,
+    };
   }
 
   private resolveCardByIdOrOracleId(id: string): CompactCard | undefined {

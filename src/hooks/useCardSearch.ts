@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CompactCard } from '../types/card.js';
 import {
   DEFAULT_SEARCH_FILTER,
+  type BudgetSwapScanRequest,
+  type BudgetSwapScanResponse,
   type SearchFilter,
   type SearchResponsePayload,
   type SyncStatusPayload,
@@ -25,6 +27,7 @@ export interface UseCardSearchReturn {
   forceResync: () => void;
   resolveCards: (req: { ids?: string[]; names?: string[] }) => Promise<ResolvedCardsMap>;
   runOneOffSearch: (filter: SearchFilter) => Promise<SearchResponsePayload>;
+  findBudgetSwaps: (request: BudgetSwapScanRequest) => Promise<BudgetSwapScanResponse>;
 }
 
 /**
@@ -41,6 +44,14 @@ export function buildEmptySearchResponse(
     page: Math.max(1, filter.page),
     pageSize: Math.max(1, filter.pageSize),
     totalPages: 1,
+    executionTimeMs: 0,
+  };
+}
+
+export function buildEmptyBudgetSwapResponse(requestId: number): BudgetSwapScanResponse {
+  return {
+    requestId,
+    results: [],
     executionTimeMs: 0,
   };
 }
@@ -65,6 +76,9 @@ export function useCardSearch(): UseCardSearchReturn {
   const pendingResolvesRef = useRef<Map<number, (res: ResolvedCardsMap) => void>>(new Map());
   const pendingOneOffResolvesRef = useRef<
     Map<number, { filter: SearchFilter; resolve: (res: SearchResponsePayload) => void }>
+  >(new Map());
+  const pendingBudgetSwapResolvesRef = useRef<
+    Map<number, (res: BudgetSwapScanResponse) => void>
   >(new Map());
 
   const dispatchSearch = useCallback((nextFilter: SearchFilter) => {
@@ -97,6 +111,11 @@ export function useCardSearch(): UseCardSearchReturn {
         pending.resolve(buildEmptySearchResponse(reqId, pending.filter));
       }
       pendingOneOffResolvesRef.current.clear();
+
+      for (const [reqId, resolver] of pendingBudgetSwapResolvesRef.current.entries()) {
+        resolver(buildEmptyBudgetSwapResponse(reqId));
+      }
+      pendingBudgetSwapResolvesRef.current.clear();
     };
 
     worker.onmessage = (event: MessageEvent<WorkerResponseMessage>) => {
@@ -114,6 +133,12 @@ export function useCardSearch(): UseCardSearchReturn {
         if (pending) {
           pendingOneOffResolvesRef.current.delete(msg.payload.requestId);
           pending.resolve(msg.payload);
+        }
+      } else if (msg.type === 'BUDGET_SWAPS_RESULT') {
+        const resolver = pendingBudgetSwapResolvesRef.current.get(msg.payload.requestId);
+        if (resolver) {
+          pendingBudgetSwapResolvesRef.current.delete(msg.payload.requestId);
+          resolver(msg.payload);
         }
       } else if (msg.type === 'RESOLVE_CARDS_RESULT') {
         if (Object.keys(msg.basicLands).length > 0) {
@@ -247,6 +272,25 @@ export function useCardSearch(): UseCardSearchReturn {
     [],
   );
 
+  const findBudgetSwaps = useCallback(
+    (swapRequest: BudgetSwapScanRequest): Promise<BudgetSwapScanResponse> => {
+      const worker = workerRef.current;
+      const reqId = ++requestIdRef.current;
+      if (!worker || swapRequest.targetCardIds.length === 0) {
+        return Promise.resolve(buildEmptyBudgetSwapResponse(reqId));
+      }
+      return new Promise<BudgetSwapScanResponse>((resolve) => {
+        pendingBudgetSwapResolvesRef.current.set(reqId, resolve);
+        worker.postMessage({
+          type: 'FIND_BUDGET_SWAPS',
+          requestId: reqId,
+          request: swapRequest,
+        } satisfies WorkerRequestMessage);
+      });
+    },
+    [],
+  );
+
   return {
     syncStatus,
     filter,
@@ -258,5 +302,6 @@ export function useCardSearch(): UseCardSearchReturn {
     forceResync,
     resolveCards,
     runOneOffSearch,
+    findBudgetSwaps,
   };
 }

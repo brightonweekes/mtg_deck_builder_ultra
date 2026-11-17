@@ -4,6 +4,7 @@ import {
   Check,
   CheckCircle2,
   ClipboardCheck,
+  Coins,
   Copy,
   Layers,
   Search,
@@ -20,15 +21,22 @@ import {
 } from '../deck/deckAnalytics.js';
 import { calculateDeckPriceUsd } from '../deck/deckCardExporter.js';
 import { exportDeckToText, parseDeckListText } from '../deck/deckSerializer.js';
+import {
+  swapCardInDeckDraft,
+  type SwapCardOptions,
+} from '../hooks/useDeckDraft.js';
 import { buildCommanderSynergyQuery, getCombinedColorIdentity } from '../search/commanderRules.js';
 import type { CompactCard, FunctionalRole, ManaColor } from '../types/card.js';
 import type { DeckCardEntry, DeckDraft } from '../types/deck.js';
 import {
   DEFAULT_SEARCH_FILTER,
+  type BudgetSwapScanRequest,
+  type BudgetSwapScanResponse,
   type ScoredCardMatch,
   type SearchFilter,
   type SearchResponsePayload,
 } from '../types/search.js';
+import { BudgetSwapsModal } from './BudgetSwapsModal.js';
 import { ColorIdentityBadges, ManaCostDisplay, ManaSymbolBadge } from './ManaSymbol.js';
 
 export interface ResolveCardsFn {
@@ -282,7 +290,15 @@ export interface DeckAuditModalProps {
   initialUpgradeMatches?: ScoredCardMatch[];
   resolveCards: ResolveCardsFn;
   runOneOffSearch?: (filter: SearchFilter) => Promise<SearchResponsePayload>;
+  findBudgetSwaps?: (req: BudgetSwapScanRequest) => Promise<BudgetSwapScanResponse>;
+  suppressEscapeClose?: boolean;
   onAddUpgradeCard?: (card: CompactCard) => void;
+  onSwapDeckCard?: (
+    outCardId: string,
+    inCard: CompactCard,
+    options?: SwapCardOptions,
+  ) => boolean;
+  onInspectCard?: (card: CompactCard) => void;
   onClose: () => void;
   onImportDeckDraft: (draft: DeckDraft, noticeMessage?: string) => void;
   onOpenCurrentStudio?: () => void;
@@ -301,7 +317,11 @@ export function DeckAuditModal({
   initialUpgradeMatches,
   resolveCards,
   runOneOffSearch,
+  findBudgetSwaps,
+  suppressEscapeClose = false,
   onAddUpgradeCard,
+  onSwapDeckCard,
+  onInspectCard,
   onClose,
   onImportDeckDraft,
   onOpenCurrentStudio,
@@ -312,6 +332,7 @@ export function DeckAuditModal({
   const [auditError, setAuditError] = useState<string | null>(null);
   const [auditResult, setAuditResult] = useState<DeckAuditResult | null>(initialAuditResult);
   const [copiedText, setCopiedText] = useState(false);
+  const [auditBudgetSwapsOpen, setAuditBudgetSwapsOpen] = useState(false);
   const [rawUpgradeMatches, setRawUpgradeMatches] = useState<ScoredCardMatch[] | null>(
     initialUpgradeMatches ?? null,
   );
@@ -344,10 +365,14 @@ export function DeckAuditModal({
   }, [activeDeck]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setAuditBudgetSwapsOpen(false);
+      return;
+    }
     setAuditError(null);
     setCopiedText(false);
     setLastAddedUpgrade(null);
+    if (suppressEscapeClose || auditBudgetSwapsOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -356,7 +381,7 @@ export function DeckAuditModal({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose]);
+  }, [open, onClose, suppressEscapeClose, auditBudgetSwapsOpen]);
 
   const upgradeFilter = useMemo(
     () => (auditResult ? buildAuditUpgradeSearchFilter(auditResult.draft) : null),
@@ -507,6 +532,28 @@ export function DeckAuditModal({
       };
     });
     setLastAddedUpgrade(card.name);
+  };
+
+  const handleSwapInAudit = (
+    outCardId: string,
+    inCard: CompactCard,
+    options?: SwapCardOptions,
+  ): boolean => {
+    if (!auditResult) return false;
+    if (auditResult.isCurrentDeck) {
+      if (!onSwapDeckCard) return false;
+      return onSwapDeckCard(outCardId, inCard, options);
+    }
+    const swapped = swapCardInDeckDraft(auditResult.draft, outCardId, inCard, options);
+    if (!swapped.swapped) return false;
+    setAuditResult((prev) => {
+      if (!prev || prev.isCurrentDeck) return prev;
+      return {
+        ...prev,
+        draft: swapped.draft,
+      };
+    });
+    return true;
   };
 
   const handleOpenInStudio = () => {
@@ -695,6 +742,18 @@ export function DeckAuditModal({
                   <span className="rounded-xl border border-slate-800 bg-slate-900 px-2.5 py-1 font-mono text-slate-300">
                     Est. ${report.priceUsd.toFixed(2)}
                   </span>
+
+                  {findBudgetSwaps && report.analytics.mainboardCount > 0 && (
+                    <button
+                      type="button"
+                      disabled={Boolean(auditResult.isCurrentDeck && !onSwapDeckCard)}
+                      onClick={() => setAuditBudgetSwapsOpen(true)}
+                      className="inline-flex items-center gap-1 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-1 font-semibold text-emerald-200 transition hover:bg-emerald-500/25 disabled:opacity-40"
+                    >
+                      <Coins className="h-3.5 w-3.5 text-emerald-300" />
+                      Budget Swaps
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1004,6 +1063,19 @@ export function DeckAuditModal({
           )}
         </div>
       </div>
+
+      {findBudgetSwaps && auditResult && (
+        <BudgetSwapsModal
+          open={auditBudgetSwapsOpen}
+          draft={auditResult.draft}
+          totalDeckPriceUsd={report?.priceUsd}
+          suppressEscapeClose={suppressEscapeClose}
+          findBudgetSwaps={findBudgetSwaps}
+          onSwapCard={handleSwapInAudit}
+          onInspectCard={onInspectCard ?? (() => {})}
+          onClose={() => setAuditBudgetSwapsOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -19,6 +19,7 @@ import {
   canAddCardToDeck,
   canPairCommanders,
   getCombinedColorIdentity,
+  getMaxAllowedCopies,
 } from '../search/commanderRules.js';
 import type { CompactCard, ManaColor } from '../types/card.js';
 import type { DeckVisibility } from '../types/cloud.js';
@@ -40,6 +41,108 @@ export interface UseDeckDraftOptions {
 export interface DeleteDeckByPolicyResult {
   deleted: boolean;
   cloudBacked: boolean;
+}
+
+export interface SwapCardOptions {
+  moveOutToSideboard?: boolean;
+  removeInFromSideboard?: boolean;
+  quantity?: number;
+}
+
+export interface SwapCardResult {
+  draft: DeckDraft;
+  swapped: boolean;
+  outCard?: CompactCard;
+  reason?: string;
+}
+
+/**
+ * Pure atomic 1-for-1 card swap on a `DeckDraft`, validating Commander color identity and
+ * singleton/copy limits while preserving exact deck count (and optionally benching the cut card
+ * to Maybeboard or reversing that move during Undo).
+ */
+export function swapCardInDeckDraft(
+  draft: DeckDraft,
+  outCardId: string,
+  inCard: CompactCard,
+  options: SwapCardOptions = {},
+): SwapCardResult {
+  const outEntry = draft.mainboard[outCardId];
+  if (!outEntry || outEntry.quantity <= 0) {
+    return { draft, swapped: false, reason: 'Card to replace is not in mainboard.' };
+  }
+  if (outCardId === inCard.id) {
+    return { draft, swapped: false, reason: 'Replacement card is already in that slot.' };
+  }
+
+  const swapQty = Math.min(Math.max(1, options.quantity ?? 1), outEntry.quantity);
+  const currentInQty = draft.mainboard[inCard.id]?.quantity ?? 0;
+  const addCheck = canAddCardToDeck(
+    inCard,
+    currentInQty,
+    draft.commanders,
+    draft.lockSearchToCommanderIdentity,
+  );
+  if (!addCheck.allowed) {
+    return { draft, swapped: false, reason: addCheck.reason ?? 'Cannot add replacement card.' };
+  }
+
+  if (getMaxAllowedCopies(inCard) === 1 && inCard.oracleId) {
+    const duplicateByOracle = Object.values(draft.mainboard).some(
+      (entry) =>
+        entry.quantity > 0 &&
+        entry.card.id !== outCardId &&
+        entry.card.oracleId === inCard.oracleId,
+    );
+    if (duplicateByOracle) {
+      return { draft, swapped: false, reason: 'Singleton limit (1 copy)' };
+    }
+  }
+
+  const nextMainboard = { ...draft.mainboard };
+  const remainingOutQty = outEntry.quantity - swapQty;
+  if (remainingOutQty <= 0) {
+    delete nextMainboard[outCardId];
+  } else {
+    nextMainboard[outCardId] = { ...outEntry, quantity: remainingOutQty };
+  }
+
+  nextMainboard[inCard.id] = {
+    card: inCard,
+    quantity: (nextMainboard[inCard.id]?.quantity ?? 0) + swapQty,
+  };
+
+  let nextSideboard = draft.sideboard;
+  if (options.moveOutToSideboard || (options.removeInFromSideboard && nextSideboard[inCard.id])) {
+    nextSideboard = { ...draft.sideboard };
+    if (options.moveOutToSideboard) {
+      const prevSbQty = nextSideboard[outCardId]?.quantity ?? 0;
+      nextSideboard[outCardId] = {
+        card: outEntry.card,
+        quantity: prevSbQty + swapQty,
+      };
+    }
+    if (options.removeInFromSideboard && nextSideboard[inCard.id]) {
+      const sbEntry = nextSideboard[inCard.id]!;
+      const remSbQty = sbEntry.quantity - swapQty;
+      if (remSbQty <= 0) {
+        delete nextSideboard[inCard.id];
+      } else {
+        nextSideboard[inCard.id] = { ...sbEntry, quantity: remSbQty };
+      }
+    }
+  }
+
+  return {
+    swapped: true,
+    outCard: outEntry.card,
+    draft: {
+      ...draft,
+      mainboard: nextMainboard,
+      sideboard: nextSideboard,
+      updatedAt: new Date().toISOString(),
+    },
+  };
 }
 
 export function createEmptyDraft(name = 'Untitled Commander Deck', id?: string): DeckDraft {
@@ -149,6 +252,7 @@ export interface UseDeckDraftReturn {
   deleteSideboardCard: (cardId: string) => void;
   moveCardToSideboard: (cardId: string) => void;
   moveCardToMainboard: (cardId: string) => boolean;
+  swapCard: (outCardId: string, inCard: CompactCard, options?: SwapCardOptions) => boolean;
   autoFillBasicLands: (basicLands: Record<string, CompactCard>) => number;
   moveIllegalCardsToSideboard: (illegalCardIds: readonly string[]) => number;
   renameDeck: (name: string) => void;
@@ -699,6 +803,44 @@ export function useDeckDraft(options: UseDeckDraftOptions = {}): UseDeckDraftRet
     [applyUserEdit, deck.commanders, deck.lockSearchToCommanderIdentity, deck.mainboard, deck.sideboard],
   );
 
+  const swapCard = useCallback(
+    (outCardId: string, inCard: CompactCard, options: SwapCardOptions = {}): boolean => {
+      const preview = swapCardInDeckDraft(deckRef.current, outCardId, inCard, options);
+      if (!preview.swapped) {
+        if (preview.reason) {
+          setLastNotice({
+            message: `${inCard.name}: ${preview.reason}`,
+            isError: true,
+          });
+        }
+        return false;
+      }
+
+      applyUserEdit(
+        (prev) => {
+          const applied = swapCardInDeckDraft(prev, outCardId, inCard, options);
+          return applied.swapped ? applied.draft : prev;
+        },
+        { recomputeThemes: true },
+      );
+
+      const outCard = preview.outCard;
+      const savedDelta =
+        outCard &&
+        outCard.priceUsd !== null &&
+        inCard.priceUsd !== null &&
+        outCard.priceUsd > inCard.priceUsd
+          ? ` (saved $${(outCard.priceUsd - inCard.priceUsd).toFixed(2)})`
+          : '';
+      const outName = outCard?.name ?? 'card';
+      setLastNotice({
+        message: `Swapped ${outName} → ${inCard.name}${savedDelta}.`,
+      });
+      return true;
+    },
+    [applyUserEdit],
+  );
+
   const autoFillBasicLands = useCallback(
     (basicLands: Record<string, CompactCard>): number => {
       if (Object.keys(basicLands).length === 0) {
@@ -1102,6 +1244,7 @@ export function useDeckDraft(options: UseDeckDraftOptions = {}): UseDeckDraftRet
     deleteSideboardCard,
     moveCardToSideboard,
     moveCardToMainboard,
+    swapCard,
     autoFillBasicLands,
     moveIllegalCardsToSideboard,
     renameDeck,

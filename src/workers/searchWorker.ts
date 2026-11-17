@@ -2,6 +2,8 @@ import { clearCardCatalogCache, syncCardCatalog } from '../db/cardDb.js';
 import { CardSearchEngine } from '../search/searchEngine.js';
 import {
   DEFAULT_SEARCH_FILTER,
+  type BudgetSwapScanRequest,
+  type BudgetSwapScanResponse,
   type SearchFilter,
   type SearchResponsePayload,
   type WorkerRequestMessage,
@@ -30,6 +32,14 @@ function createEmptySearchResult(requestId: number, filter: SearchFilter): Searc
   };
 }
 
+function createEmptyBudgetSwapsResult(requestId: number): BudgetSwapScanResponse {
+  return {
+    requestId,
+    results: [],
+    executionTimeMs: 0,
+  };
+}
+
 /**
  * Stateful request router for the catalog Web Worker.
  * Queues searches and one-off synergy queries independently until indexing completes.
@@ -40,6 +50,7 @@ export class SearchWorkerController {
   private hasInitError = false;
   private pendingSearch: { requestId: number; filter: SearchFilter } | null = null;
   private pendingOneOffSearches: Array<{ requestId: number; filter: SearchFilter }> = [];
+  private pendingBudgetSwaps: Array<{ requestId: number; request: BudgetSwapScanRequest }> = [];
   private pendingResolves: Array<{ requestId: number; ids?: string[]; names?: string[] }> = [];
 
   constructor(
@@ -142,6 +153,15 @@ export class SearchWorkerController {
         });
       }
 
+      const budgetSwapsToRun = this.pendingBudgetSwaps;
+      this.pendingBudgetSwaps = [];
+      for (const req of budgetSwapsToRun) {
+        this.post({
+          type: 'BUDGET_SWAPS_RESULT',
+          payload: nextEngine.findBudgetSwaps(req.request, req.requestId),
+        });
+      }
+
       if (this.onReadyWarmup) {
         this.onReadyWarmup(nextEngine);
       }
@@ -157,6 +177,14 @@ export class SearchWorkerController {
         this.post({
           type: 'ONEOFF_SEARCH_RESULT',
           payload: createEmptySearchResult(req.requestId, req.filter),
+        });
+      }
+      const failedBudgetSwaps = this.pendingBudgetSwaps;
+      this.pendingBudgetSwaps = [];
+      for (const req of failedBudgetSwaps) {
+        this.post({
+          type: 'BUDGET_SWAPS_RESULT',
+          payload: createEmptyBudgetSwapsResult(req.requestId),
         });
       }
       this.post({
@@ -216,6 +244,23 @@ export class SearchWorkerController {
         this.post({
           type: 'ONEOFF_SEARCH_RESULT',
           payload: this.engine.search(msg.filter, msg.requestId),
+        });
+        break;
+      case 'FIND_BUDGET_SWAPS':
+        if (!this.engine) {
+          if (!this.isInitializing && this.hasInitError) {
+            this.post({
+              type: 'BUDGET_SWAPS_RESULT',
+              payload: createEmptyBudgetSwapsResult(msg.requestId),
+            });
+            return;
+          }
+          this.pendingBudgetSwaps.push({ requestId: msg.requestId, request: msg.request });
+          return;
+        }
+        this.post({
+          type: 'BUDGET_SWAPS_RESULT',
+          payload: this.engine.findBudgetSwaps(msg.request, msg.requestId),
         });
         break;
       case 'GET_BY_IDS':

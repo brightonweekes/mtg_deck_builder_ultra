@@ -45,7 +45,7 @@ V1 uses **Local-First storage** (`IndexedDB` auto-save + compressed shareable de
 
 ## 3. High-Impact Commander Features (Deferred Beyond Phase 3)
 
-> **Phase 3 Update:** **Ripple Chains** (*Trigger ↔ Enabler ↔ Payoff* directional engine with `Starters`, `Payoffs`, and `Hidden Gems ≤ $5`) shipped in Phase 3 via [`src/search/rippleEngine.ts`](./src/search/rippleEngine.ts) and [`RippleChainBar.tsx`](./src/components/RippleChainBar.tsx). To keep Ripple99 simple and focused, the remaining differentiators below (`1,000-Hand Monte Carlo Simulator`, `Commander-Tempo Curve Audit`, `Bracket (1–4) Evaluator`, and `Budget Swap Finder`) stay here in Future Ideas.
+> **Phase 3 Update:** **Ripple Chains** (*Trigger ↔ Enabler ↔ Payoff* directional engine with `Starters`, `Payoffs`, and `Hidden Gems ≤ $5`) and **Budget Swap Finder** ([`src/search/budgetSwapEngine.ts`](./src/search/budgetSwapEngine.ts) & [`BudgetSwapsModal.tsx`](./src/components/BudgetSwapsModal.tsx)) are now shipped! The remaining differentiators below (`1,000-Hand Monte Carlo Simulator`, `Commander-Tempo Curve Audit`, and `Commander Bracket (1–4) Evaluator`) stay here in Future Ideas.
 
 ### ~~Trigger ↔ Enabler ↔ Payoff Synergy Engine~~ *(Shipped as Ripple Chains in Phase 3)*
 * **Concept:** Goes beyond generic popularity lists (like EDHREC) by analyzing *cause-and-effect* mechanics between your Commander and the 99.
@@ -67,9 +67,9 @@ V1 uses **Local-First storage** (`IndexedDB` auto-save + compressed shareable de
 * **Concept:** Flags subtle mana-curve collisions around the Commander's mana value.
 * **How it works:** Evaluates your ramp package against your Commander's MV (e.g., warning when a 3-mana Commander is paired with 3-mana mana rocks that compete for Turn 3, suggesting 1-mana or 2-mana ramp instead).
 
-### Commander Bracket (1–4) Evaluator & Budget Swap Finder
-* **Concept:** Helps players tune decks for their playgroup's power level and wallet.
-* **How it works:** Scans the 100-card list for fast mana, tutors, known 2-card combos, and official Commander "Game Changers" to estimate its Bracket (1–4), and provides a one-click **Budget Swap Finder** that uses Method A's mechanical tags to suggest <\$1 alternatives to expensive staples.
+### Commander Bracket (1–4) Evaluator
+* **Concept:** Helps players tune decks for their playgroup's power level. *(The **Budget Swap Finder** companion feature is now shipped in Studio, Audit, Quick Drawer, and Card Detail views!)*
+* **How it works:** Scans the 100-card list for fast mana, tutors, known 2-card combos, and official Commander "Game Changers" to estimate its Bracket (1–4).
 
 ### Physical Card Scanner (In-Browser Camera OCR & Visual Matching)
 * **Concept:** Point a phone camera or webcam at physical Magic cards (stacks, binders, or precon upgrades) to scan them straight into a deck, maybeboard, or collection without manually typing card names.

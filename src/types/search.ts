@@ -74,6 +74,37 @@ export interface ScoredCardMatch {
   matchedReasons: string[];
 }
 
+export type BudgetSwapConfidence = 'direct' | 'similar' | 'loose';
+
+export interface BudgetSwapCandidate {
+  card: CompactCard;
+  score: number;
+  savingsUsd: number;
+  confidence: BudgetSwapConfidence;
+  reasons: string[];
+  fitsCommanderRipple: boolean;
+}
+
+export interface BudgetSwapTargetResult {
+  targetCard: CompactCard;
+  suggestions: BudgetSwapCandidate[];
+}
+
+export interface BudgetSwapScanRequest {
+  targetCardIds: string[];
+  commanderIds: string[];
+  excludeCardIds: string[];
+  colorIdentity: ManaColor[] | null;
+  maxSwapPriceUsd: number;
+  perTargetLimit?: number;
+}
+
+export interface BudgetSwapScanResponse {
+  requestId: number;
+  results: BudgetSwapTargetResult[];
+  executionTimeMs: number;
+}
+
 export interface SearchResponsePayload {
   requestId: number;
   matches: ScoredCardMatch[];
@@ -108,6 +139,7 @@ export type WorkerRequestMessage =
   | { type: 'INIT'; baseUrl?: string }
   | { type: 'SEARCH'; requestId: number; filter: SearchFilter }
   | { type: 'ONEOFF_SEARCH'; requestId: number; filter: SearchFilter }
+  | { type: 'FIND_BUDGET_SWAPS'; requestId: number; request: BudgetSwapScanRequest }
   | { type: 'GET_BY_IDS'; requestId: number; ids: string[] }
   | { type: 'RESOLVE_CARDS'; requestId: number; ids?: string[]; names?: string[] }
   | { type: 'FORCE_RESYNC'; baseUrl?: string };
@@ -116,6 +148,7 @@ export type WorkerResponseMessage =
   | { type: 'SYNC_STATUS'; payload: SyncStatusPayload }
   | { type: 'SEARCH_RESULT'; payload: SearchResponsePayload }
   | { type: 'ONEOFF_SEARCH_RESULT'; payload: SearchResponsePayload }
+  | { type: 'BUDGET_SWAPS_RESULT'; payload: BudgetSwapScanResponse }
   | { type: 'CARDS_BY_IDS_RESULT'; requestId: number; cards: CompactCard[] }
   | {
       type: 'RESOLVE_CARDS_RESULT';

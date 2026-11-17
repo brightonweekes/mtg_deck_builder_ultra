@@ -8,6 +8,7 @@ import {
 import { AccountModal } from './components/AccountModal.js';
 import { ActiveFilterBar } from './components/ActiveFilterBar.js';
 import { AuthModal } from './components/AuthModal.js';
+import { BudgetSwapsModal } from './components/BudgetSwapsModal.js';
 import { CardDetailModal } from './components/CardDetailModal.js';
 import { CardGrid } from './components/CardGrid.js';
 import { DeckAuditModal } from './components/DeckAuditModal.js';
@@ -37,6 +38,7 @@ import {
 } from './hooks/useCloudSync.js';
 import { useDeckDraft, type DeckActionNotice } from './hooks/useDeckDraft.js';
 import { useFriends } from './hooks/useFriends.js';
+import { collectDeckExcludedCardIds } from './search/budgetSwapEngine.js';
 import {
   getChooseCommanderFilter,
   getCompatiblePartnerFilter,
@@ -122,6 +124,7 @@ export function App() {
     forceResync,
     resolveCards,
     runOneOffSearch,
+    findBudgetSwaps,
   } = useCardSearch();
 
   const [hasCloudUrlIntentOnMount] = useState(() =>
@@ -156,6 +159,7 @@ export function App() {
     deleteSideboardCard,
     moveCardToSideboard,
     moveCardToMainboard,
+    swapCard,
     autoFillBasicLands,
     moveIllegalCardsToSideboard,
     renameDeck,
@@ -210,6 +214,10 @@ export function App() {
   const [deckDrawerOpen, setDeckDrawerOpen] = useState(false);
   const [deckManagerTab, setDeckManagerTab] = useState<DeckManagerTab | null>(null);
   const [auditModalOpen, setAuditModalOpen] = useState(false);
+  const [budgetSwapModalState, setBudgetSwapModalState] = useState<{
+    open: boolean;
+    targetCardId: string | null;
+  }>({ open: false, targetCardId: null });
   const [tableQrOpen, setTableQrOpen] = useState(false);
   const [inspectedMatch, setInspectedMatch] = useState<ScoredCardMatch | null>(null);
 
@@ -250,6 +258,7 @@ export function App() {
     ],
     [deck.commanders, deck.mainboard],
   );
+  const deckExcludedIds = useMemo(() => collectDeckExcludedCardIds(deck), [deck]);
 
   const activeRippleSeeds = useMemo(() => {
     const ids = filter.rippleSeedIds ?? [];
@@ -1275,6 +1284,9 @@ export function App() {
           }
           onQuickFilterRole={handleQuickFilterRole}
           onOpenDeckManager={(t) => setDeckManagerTab(t)}
+          onOpenBudgetSwaps={(targetCardId) =>
+            setBudgetSwapModalState({ open: true, targetCardId: targetCardId ?? null })
+          }
           onChooseCommander={handleChooseCommander}
           onInspectCard={handleInspectRawCard}
         />
@@ -1302,6 +1314,9 @@ export function App() {
         onMatchSynergy={handleMatchCommanderSynergy}
         onOpenFullWorkspace={() => setActiveTab('deck')}
         onOpenDeckManager={() => setDeckManagerTab('decks')}
+        onOpenBudgetSwaps={() =>
+          setBudgetSwapModalState({ open: true, targetCardId: null })
+        }
         onInspectCard={handleInspectRawCard}
       />
 
@@ -1340,7 +1355,11 @@ export function App() {
         activeDeckPriceUsd={totalDeckPriceUsd}
         resolveCards={resolveCards}
         runOneOffSearch={runOneOffSearch}
+        findBudgetSwaps={findBudgetSwaps}
+        suppressEscapeClose={Boolean(inspectedMatch)}
         onAddUpgradeCard={addCard}
+        onSwapDeckCard={swapCard}
+        onInspectCard={handleInspectRawCard}
         onClose={() => setAuditModalOpen(false)}
         onImportDeckDraft={handleImportDeckDraft}
         onOpenCurrentStudio={() => setActiveTab('deck')}
@@ -1348,6 +1367,19 @@ export function App() {
           handleQuickFilterRole(role, auditedIdentity);
           setAuditModalOpen(false);
         }}
+      />
+
+      {/* Full-Deck & Per-Card Budget Swap Finder */}
+      <BudgetSwapsModal
+        open={budgetSwapModalState.open}
+        draft={deck}
+        totalDeckPriceUsd={totalDeckPriceUsd}
+        initialTargetCardId={budgetSwapModalState.targetCardId}
+        suppressEscapeClose={Boolean(inspectedMatch)}
+        findBudgetSwaps={findBudgetSwaps}
+        onSwapCard={swapCard}
+        onInspectCard={handleInspectRawCard}
+        onClose={() => setBudgetSwapModalState({ open: false, targetCardId: null })}
       />
 
       {/* Scannable LGS Table QR Modal */}
@@ -1482,6 +1514,12 @@ export function App() {
         enforceColorIdentity={deck.lockSearchToCommanderIdentity}
         quantityInDeck={inspectedMatch ? getCardQuantity(inspectedMatch.card.id) : 0}
         isCommander={inspectedMatch ? isCommander(inspectedMatch.card.id) : false}
+        excludeCardIds={deckExcludedIds}
+        findBudgetSwaps={findBudgetSwaps}
+        onSwapInDeck={(outId, inCard) =>
+          swapCard(outId, inCard, { moveOutToSideboard: true })
+        }
+        onInspectCard={handleInspectRawCard}
         onClose={() => setInspectedMatch(null)}
         onAddCard={addCard}
         onRemoveOneCard={removeOneCard}
