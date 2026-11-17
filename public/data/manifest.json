@@ -1,12 +1,12 @@
 {
-  "version": "8564f2467aad7d5f",
-  "generatedAt": "2026-11-17T05:13:23.455Z",
-  "scryfallUpdatedAt": "2026-11-14T10:02:08.197+00:00",
+  "version": "3f6241d757c79ae6",
+  "generatedAt": "2026-11-17T13:03:27.887Z",
+  "scryfallUpdatedAt": "2026-11-17T10:02:01.401+00:00",
   "totalCards": 32643,
   "commanderCount": 3759,
-  "rawSizeBytes": 22578082,
-  "gzipSizeBytes": 5035392,
-  "brotliSizeBytes": 3063961,
+  "rawSizeBytes": 22577931,
+  "gzipSizeBytes": 5034997,
+  "brotliSizeBytes": 3063462,
   "roleCounts": {
     "ramp": 1906,
     "draw": 2194,
