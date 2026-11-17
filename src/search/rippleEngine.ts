@@ -281,6 +281,14 @@ export interface RippleProfile {
   minCmcForEnablerTypes?: number;
 }
 
+export const RIPPLE_FLAG_FREE_SAC = 1 << 0;
+export const RIPPLE_FLAG_OWN_CAST_SPELL = 1 << 1;
+export const RIPPLE_FLAG_LANDFALL_TRIGGER = 1 << 2;
+export const RIPPLE_FLAG_KINDRED_GENERIC = 1 << 3;
+export const RIPPLE_FLAG_STAX = 1 << 4;
+export const RIPPLE_FLAG_THEFT = 1 << 5;
+export const RIPPLE_FLAG_CHANGELING = 1 << 6;
+
 export interface RippleIndex {
   enablerMasks: Uint32Array;
   payoffMasks: Uint32Array;
@@ -296,6 +304,11 @@ export interface RippleIndex {
   kindredGenericFlags: Uint8Array;
   staxFlags: Uint8Array;
   theftFlags: Uint8Array;
+  changelingFlags?: Uint8Array;
+  rawLowers?: readonly string[];
+  cards?: readonly CompactCard[];
+  subtypeMaskCache?: Map<string, Uint8Array>;
+  customTermMaskCache?: Map<string, Uint8Array>;
 }
 
 export interface CompiledSubtypeMatcher {
@@ -581,9 +594,458 @@ function extractSubtypesLowerFast(typeLower: string): string {
   return s1 && s2 ? `${s1} ${s2}` : s1 || s2;
 }
 
+export interface ComputedCardRippleMasks {
+  rEn: number;
+  rPay: number;
+  rFlg: number;
+  cleanLower: string;
+  condLower: string;
+  multLower: string;
+  typeLower: string;
+}
+
+function extractCardRippleCorpora(
+  card: CompactCard,
+  preLowerOracle?: string,
+  preLowerTypeLine?: string,
+): {
+  rawLower: string;
+  cleanLower: string;
+  typeLower: string;
+  ownCondCorpus: string;
+  condCorpus: string;
+  multCorpus: string;
+} {
+  const { rawLower, cleanLower, typeLower } = normalizePreservingNewlines(
+    card,
+    preLowerOracle,
+    preLowerTypeLine,
+  );
+
+  let ownCondCorpus = '';
+  let condCorpus = '';
+  let multCorpus = '';
+
+  if (
+    cleanLower.includes('when') ||
+    cleanLower.includes(':') ||
+    cleanLower.includes('at the beginning') ||
+    cleanLower.includes('additional') ||
+    cleanLower.includes('for each') ||
+    cleanLower.includes('twice') ||
+    cleanLower.includes('number of')
+  ) {
+    const lines = cleanLower.split('\n');
+    for (let l = 0; l < lines.length; l++) {
+      const line = lines[l]!;
+      if (!line) continue;
+      if (
+        line.includes('additional') ||
+        line.includes('twice') ||
+        line.includes('double') ||
+        line.includes('triple') ||
+        line.includes('instead') ||
+        line.includes('for each') ||
+        line.includes('number of') ||
+        line.includes('equal to') ||
+        line.includes('less to cast')
+      ) {
+        multCorpus += `${line} `;
+      }
+      const trig = RE_TRIG_LINE.exec(line);
+      if (trig) {
+        const cnd = trig[1]!;
+        condCorpus += `${cnd} `;
+        if (!cnd.includes('opponent')) ownCondCorpus += `${cnd} `;
+        continue;
+      }
+      if (RE_ACT_LINE.test(line)) {
+        continue;
+      }
+      const step = RE_STEP_LINE.exec(line);
+      if (step && step[1]) {
+        condCorpus += `${step[1]} `;
+        ownCondCorpus += `${step[1]} `;
+      }
+    }
+  }
+
+  return { rawLower, cleanLower, typeLower, ownCondCorpus, condCorpus, multCorpus };
+}
+
+/**
+ * Computes deterministic directional Ripple Chain bitmasks and flags for a single card.
+ * Used at build time in `normalizeCard` and as a fallback for un-precomputed synthetic cards.
+ */
+export function computeCardRippleMasks(
+  card: CompactCard,
+  preLowerOracle?: string,
+  preLowerTypeLine?: string,
+): ComputedCardRippleMasks {
+  const { rawLower, cleanLower, typeLower, ownCondCorpus, condCorpus, multCorpus } =
+    extractCardRippleCorpora(card, preLowerOracle, preLowerTypeLine);
+  const themes = card.themes;
+  const roles = card.roles;
+
+  const isCreature = typeLower.includes('creature');
+  const isArtifact = typeLower.includes('artifact');
+  const isEnchantment = typeLower.includes('enchantment');
+  const isInstant = typeLower.includes('instant');
+  const isSorcery = typeLower.includes('sorcery');
+  const isLand = typeLower.includes('land');
+  const isPlaneswalker = typeLower.includes('planeswalker');
+  const isSaga = typeLower.includes('saga');
+
+  let rFlg = 0;
+  if (RE_KINDRED_PAYOFF.test(cleanLower) || typeLower.includes('kindred')) {
+    rFlg |= RIPPLE_FLAG_KINDRED_GENERIC;
+  }
+  if (
+    themes.includes('stax') ||
+    ((cleanLower.includes('cost') ||
+      cleanLower.includes("can't") ||
+      cleanLower.includes("don't untap")) &&
+      RE_STAX_RULE.test(cleanLower))
+  ) {
+    rFlg |= RIPPLE_FLAG_STAX;
+  }
+  if (
+    themes.includes('theft') ||
+    ((cleanLower.includes('control') || cleanLower.includes('opponent')) &&
+      RE_THEFT_RULE.test(cleanLower))
+  ) {
+    rFlg |= RIPPLE_FLAG_THEFT;
+  }
+  if (cleanLower.includes('changeling')) {
+    rFlg |= RIPPLE_FLAG_CHANGELING;
+  }
+
+  let em = 0;
+  let pm = 0;
+
+  // --- ENABLER BITS (What the card supplies / produces / fuels) ---
+  if (cleanLower.includes('sacrific')) {
+    if (RE_SAC_OUTLET.test(cleanLower)) em |= 1 << MECHANIC_BITS.SAC_OUTLET;
+    if (RE_FREE_SAC_ACTIVATED.test(cleanLower)) rFlg |= RIPPLE_FLAG_FREE_SAC;
+    if (RE_SAC_PERM.test(cleanLower)) em |= 1 << MECHANIC_BITS.SAC_PERMANENT_FODDER;
+  }
+  if (themes.includes('sac-outlet')) em |= 1 << MECHANIC_BITS.SAC_PERMANENT_FODDER;
+  if (isCreature && (RE_CREATURE_SELF_SAC.test(rawLower) || RE_CREATURE_DIES.test(cleanLower))) {
+    em |= 1 << MECHANIC_BITS.CREATURE_DIES_FODDER;
+  }
+  if (
+    themes.includes('token-generator') ||
+    ((cleanLower.includes('token') ||
+      cleanLower.includes('populate') ||
+      cleanLower.includes('myriad') ||
+      cleanLower.includes('squad') ||
+      cleanLower.includes('offspring') ||
+      cleanLower.includes('amass') ||
+      cleanLower.includes('investigate')) &&
+      RE_TOKEN_MAKE.test(cleanLower))
+  ) {
+    em |= 1 << MECHANIC_BITS.TOKENS;
+    if (cleanLower.includes('creature token') || cleanLower.includes('populate')) {
+      em |= 1 << MECHANIC_BITS.CREATURE_DIES_FODDER;
+    }
+  }
+  if (
+    themes.includes('treasure') ||
+    (cleanLower.includes('treasure') && RE_TREASURE_MAKE.test(cleanLower))
+  ) {
+    em |=
+      (1 << MECHANIC_BITS.TREASURE) |
+      (1 << MECHANIC_BITS.SAC_PERMANENT_FODDER) |
+      (1 << MECHANIC_BITS.ARTIFACTS_MATTER);
+  }
+  if (
+    !isLand &&
+    (isCreature || isArtifact || isEnchantment) &&
+    cleanLower.includes('when ~ enters')
+  ) {
+    em |= 1 << MECHANIC_BITS.ETB_TRIGGER;
+  }
+  if (themes.includes('blink') || (cleanLower.includes('exile') && RE_BLINK.test(cleanLower))) {
+    em |= 1 << MECHANIC_BITS.BLINK_FLICKER;
+  }
+  if (
+    themes.includes('plus-one-counters') ||
+    (cleanLower.includes('+1/+1') && RE_PLUS1_GEN.test(cleanLower)) ||
+    /\bbolster\b|\bevolve\b|\bconnive\b|\bexplore\b/.test(cleanLower)
+  ) {
+    em |= (1 << MECHANIC_BITS.PLUS1_COUNTERS) | (1 << MECHANIC_BITS.PROLIFERATE_COUNTERS);
+  }
+  if (
+    isPlaneswalker ||
+    isSaga ||
+    (rawLower.includes('counter') && RE_COUNTERS_ANY.test(rawLower)) ||
+    rawLower.includes('toxic') ||
+    rawLower.includes('infect')
+  ) {
+    em |= 1 << MECHANIC_BITS.PROLIFERATE_COUNTERS;
+  }
+  if (
+    themes.includes('mill') ||
+    ((rawLower.includes('mill') ||
+      rawLower.includes('surveil') ||
+      rawLower.includes('dredge') ||
+      rawLower.includes('graveyard')) &&
+      RE_GY_FILL.test(rawLower))
+  ) {
+    em |= 1 << MECHANIC_BITS.GRAVEYARD_FILL;
+  }
+  if (
+    themes.includes('reanimator') ||
+    roles.includes('recursion') ||
+    (cleanLower.includes('graveyard') && RE_REANIMATE.test(cleanLower))
+  ) {
+    em |= 1 << MECHANIC_BITS.REANIMATE_RECUR;
+  }
+  if ((isInstant || isSorcery) && card.cmc <= 4) {
+    em |= 1 << MECHANIC_BITS.INSTANT_SORCERY;
+  }
+  if (RE_SPELL_COPY.test(rawLower)) {
+    em |= 1 << MECHANIC_BITS.SPELL_COPY_FORK;
+    if (isInstant || isSorcery) em |= 1 << MECHANIC_BITS.INSTANT_SORCERY;
+  }
+  if (isArtifact || (cleanLower.includes('token') && RE_ART_TOKENS.test(cleanLower))) {
+    em |= 1 << MECHANIC_BITS.ARTIFACTS_MATTER;
+  }
+  if (isEnchantment) em |= 1 << MECHANIC_BITS.ENCHANTMENTS_MATTER;
+  if (RE_EXILE_EN.test(rawLower)) em |= 1 << MECHANIC_BITS.EXILE_CAST;
+  if (
+    themes.includes('wheels') ||
+    ((rawLower.includes('discard') ||
+      rawLower.includes('connive') ||
+      rawLower.includes('blood token')) &&
+      RE_DISCARD_EN.test(rawLower))
+  ) {
+    em |= 1 << MECHANIC_BITS.DISCARD_MADNESS;
+  }
+  if (roles.includes('draw') || themes.includes('wheels')) {
+    em |= 1 << MECHANIC_BITS.CARD_DRAW;
+  }
+  if (
+    cleanLower.includes('life') &&
+    RE_LIFE_REPEAT.test(cleanLower) &&
+    RE_LIFE_VAL.test(cleanLower)
+  ) {
+    em |= 1 << MECHANIC_BITS.LIFEGAIN;
+  }
+  if (
+    (isLand && cleanLower.includes('sacrific') && cleanLower.includes('search your library')) ||
+    (cleanLower.includes('land') && RE_LAND_RAMP.test(cleanLower))
+  ) {
+    em |= 1 << MECHANIC_BITS.LANDFALL_LANDS;
+  }
+  if (themes.includes('extra-combat') || RE_ATK_EN.test(rawLower)) {
+    em |= 1 << MECHANIC_BITS.ATTACK_COMBAT;
+  }
+  if (
+    RE_EVADE_EN.test(rawLower) ||
+    (isCreature &&
+      card.cmc <= 3 &&
+      (card.keywords.includes('Flying') ||
+        card.keywords.includes('Menace') ||
+        card.keywords.includes('Shadow') ||
+        card.keywords.includes('Skulk')))
+  ) {
+    em |= 1 << MECHANIC_BITS.COMBAT_DAMAGE_EVASION;
+  }
+  if (typeLower.includes('equipment') || typeLower.includes('aura')) {
+    em |= 1 << MECHANIC_BITS.EQUIPMENT_AURA;
+  }
+  if (
+    (cleanLower.includes('untap') || cleanLower.includes('haste')) &&
+    RE_UNTAP_EN.test(cleanLower)
+  ) {
+    em |= 1 << MECHANIC_BITS.TAP_UNTAP;
+  }
+  if (
+    themes.includes('burn') ||
+    ((cleanLower.includes('damage') || cleanLower.includes('loses')) &&
+      RE_BURN_EN.test(cleanLower) &&
+      (cleanLower.includes('whenever') ||
+        cleanLower.includes('at the beginning') ||
+        cleanLower.includes('{t}:')))
+  ) {
+    em |= 1 << MECHANIC_BITS.BURN_DRAIN;
+  }
+  if (themes.includes('clone') || (cleanLower.includes('copy') && RE_CLONE_EN.test(cleanLower))) {
+    em |= 1 << MECHANIC_BITS.CLONE_COPY;
+  }
+  if (RE_TOPDECK_EN.test(rawLower)) em |= 1 << MECHANIC_BITS.TOPDECK_MATTERS;
+  if (isCreature && card.cmc >= 4) em |= 1 << MECHANIC_BITS.BIG_CREATURE_POWER;
+  if (roles.includes('ramp') || RE_COST_RED.test(cleanLower)) {
+    em |= 1 << MECHANIC_BITS.COST_REDUCTION_BIG_MANA;
+  }
+  if (roles.includes('protection') || RE_PROT_EN.test(cleanLower)) {
+    em |= 1 << MECHANIC_BITS.PROTECTION_INDESTRUCTIBLE;
+  }
+
+  // --- PAYOFF BITS (What the card triggers on, multiplies, or scales with) ---
+  const condAndMult = `${ownCondCorpus} ${multCorpus}`;
+  if (
+    ownCondCorpus.includes('sacrifice') ||
+    (multCorpus.includes('sacrificed') && RE_PAY_SAC_MULT.test(multCorpus))
+  ) {
+    pm |= 1 << MECHANIC_BITS.SAC_PERMANENT_FODDER;
+    if (ownCondCorpus.includes('creature') || ownCondCorpus.includes('permanent')) {
+      pm |= 1 << MECHANIC_BITS.SAC_OUTLET;
+    }
+  }
+  if (
+    (condCorpus.includes('dies') || multCorpus.includes('dying') || multCorpus.includes('died')) &&
+    RE_PAY_DIES_COND.test(`${condCorpus} ${multCorpus}`)
+  ) {
+    pm |= (1 << MECHANIC_BITS.CREATURE_DIES_FODDER) | (1 << MECHANIC_BITS.SAC_OUTLET);
+  }
+  if (
+    (condAndMult.includes('token') && !/^~$/.test(condCorpus.trim())) ||
+    RE_PAY_TOKENS.test(cleanLower)
+  ) {
+    pm |= 1 << MECHANIC_BITS.TOKENS;
+  }
+  if (
+    ownCondCorpus.includes('artifact') ||
+    ownCondCorpus.includes('treasure') ||
+    RE_PAY_ARTIFACTS.test(cleanLower)
+  ) {
+    pm |= (1 << MECHANIC_BITS.TREASURE) | (1 << MECHANIC_BITS.ARTIFACTS_MATTER);
+  }
+  if (RE_PAY_ETB_DOUB.test(cleanLower) || RE_PAY_ETB_TRIG.test(ownCondCorpus)) {
+    pm |= (1 << MECHANIC_BITS.ETB_TRIGGER) | (1 << MECHANIC_BITS.BLINK_FLICKER);
+  }
+  if (
+    ownCondCorpus.includes('+1/+1 counter') ||
+    (cleanLower.includes('+1/+1 counter') && RE_PAY_PLUS1_MULT.test(cleanLower))
+  ) {
+    pm |= 1 << MECHANIC_BITS.PLUS1_COUNTERS;
+  }
+  if (
+    cleanLower.includes('proliferate') ||
+    (cleanLower.includes('counter') && RE_PAY_PROLIF.test(cleanLower))
+  ) {
+    pm |= 1 << MECHANIC_BITS.PROLIFERATE_COUNTERS;
+  }
+  if (
+    ownCondCorpus.includes('graveyard') ||
+    ownCondCorpus.includes('milled') ||
+    RE_PAY_GY.test(rawLower)
+  ) {
+    pm |= (1 << MECHANIC_BITS.GRAVEYARD_FILL) | (1 << MECHANIC_BITS.REANIMATE_RECUR);
+  }
+  if (
+    !isInstant &&
+    !isSorcery &&
+    (RE_PAY_SPELL_COND.test(condAndMult) || RE_PAY_PROWESS.test(rawLower))
+  ) {
+    pm |= 1 << MECHANIC_BITS.INSTANT_SORCERY;
+    if (ownCondCorpus.includes('instant or sorcery') || rawLower.includes('magecraft')) {
+      rFlg |= RIPPLE_FLAG_OWN_CAST_SPELL;
+    }
+  }
+  if (
+    ownCondCorpus.includes('copy') ||
+    cleanLower.includes('instant or sorcery spell causes a triggered ability')
+  ) {
+    pm |= 1 << MECHANIC_BITS.SPELL_COPY_FORK;
+  }
+  if (
+    condAndMult.includes('enchantment') ||
+    condAndMult.includes('aura') ||
+    condAndMult.includes('saga') ||
+    RE_PAY_ENCH.test(cleanLower)
+  ) {
+    pm |= 1 << MECHANIC_BITS.ENCHANTMENTS_MATTER;
+  }
+  if (RE_PAY_EXILE.test(condAndMult)) pm |= 1 << MECHANIC_BITS.EXILE_CAST;
+  if (ownCondCorpus.includes('discard') || rawLower.includes('madness')) {
+    pm |= 1 << MECHANIC_BITS.DISCARD_MADNESS;
+  }
+  if (RE_PAY_DRAW_COND.test(ownCondCorpus) || RE_PAY_DRAW_MULT.test(cleanLower)) {
+    pm |= 1 << MECHANIC_BITS.CARD_DRAW;
+  }
+  if (RE_PAY_LIFE_COND.test(ownCondCorpus) || RE_PAY_LIFE_MULT.test(cleanLower)) {
+    pm |= 1 << MECHANIC_BITS.LIFEGAIN;
+  }
+  if (
+    RE_PAY_LAND_COND.test(ownCondCorpus) ||
+    rawLower.includes('landfall') ||
+    RE_PAY_LAND_MULT.test(cleanLower)
+  ) {
+    pm |= 1 << MECHANIC_BITS.LANDFALL_LANDS;
+    if (rawLower.includes('landfall') || RE_PAY_LAND_COND.test(ownCondCorpus)) {
+      rFlg |= RIPPLE_FLAG_LANDFALL_TRIGGER;
+    }
+  }
+  if (
+    RE_PAY_ATK_COND.test(ownCondCorpus) ||
+    cleanLower.includes('creature attacking causes') ||
+    cleanLower.includes('additional combat phase')
+  ) {
+    pm |= 1 << MECHANIC_BITS.ATTACK_COMBAT;
+  }
+  if (ownCondCorpus.includes('deals combat damage') || RE_PAY_DMG_MULT.test(cleanLower)) {
+    pm |= 1 << MECHANIC_BITS.COMBAT_DAMAGE_EVASION;
+  }
+  if (
+    condAndMult.includes('equipment') ||
+    condAndMult.includes('aura') ||
+    condAndMult.includes('equipped') ||
+    condAndMult.includes('enchanted') ||
+    RE_PAY_EQUIP_FREE.test(cleanLower)
+  ) {
+    pm |= 1 << MECHANIC_BITS.EQUIPMENT_AURA;
+  }
+  if (
+    (ownCondCorpus.includes('becomes tapped') ||
+      ownCondCorpus.includes('untap') ||
+      cleanLower.includes('activated abilities')) &&
+    (cleanLower.includes('untap') ||
+      cleanLower.includes('copied') ||
+      cleanLower.includes('inspired'))
+  ) {
+    pm |= 1 << MECHANIC_BITS.TAP_UNTAP;
+  }
+  if (
+    condCorpus.includes('opponent loses life') ||
+    condCorpus.includes('noncombat damage') ||
+    RE_PAY_BURN_MULT.test(cleanLower)
+  ) {
+    pm |= 1 << MECHANIC_BITS.BURN_DRAIN;
+  }
+  if (
+    cleanLower.includes('additional time') ||
+    cleanLower.includes('activated abilities of creatures you control are copied') ||
+    cleanLower.includes('copy target triggered ability')
+  ) {
+    pm |= 1 << MECHANIC_BITS.CLONE_COPY;
+  }
+  if (RE_PAY_TOPDECK.test(cleanLower)) pm |= 1 << MECHANIC_BITS.TOPDECK_MATTERS;
+  if (cleanLower.includes('power') && RE_PAY_POWER.test(cleanLower)) {
+    pm |= 1 << MECHANIC_BITS.BIG_CREATURE_POWER;
+  }
+  if (card.cmc >= 7 || card.manaCost.includes('{X}')) {
+    pm |= 1 << MECHANIC_BITS.COST_REDUCTION_BIG_MANA;
+  }
+  if (roles.includes('wipe')) pm |= 1 << MECHANIC_BITS.PROTECTION_INDESTRUCTIBLE;
+
+  return {
+    rEn: em >>> 0,
+    rPay: pm >>> 0,
+    rFlg: rFlg >>> 0,
+    cleanLower,
+    condLower: condCorpus ? condCorpus.trim() : '',
+    multLower: multCorpus ? multCorpus.trim() : '',
+    typeLower,
+  };
+}
+
 /**
  * Builds directional Ripple Chain bitmasks across a card collection (~260 KB total for 32.6k cards).
- * Can run lazily on the search worker for the full catalog or instantaneously on <=100 deck cards.
+ * Uses precomputed `rEn`/`rPay`/`rFlg` fields when available to keep worker startup under a few ms,
+ * falling back to full rules-text extraction for un-precomputed synthetic cards.
  */
 export function buildRippleIndex(
   cards: readonly CompactCard[],
@@ -597,8 +1059,8 @@ export function buildRippleIndex(
   const cleanLowers = new Array<string>(len);
   const condLowers = new Array<string>(len);
   const multLowers = new Array<string>(len);
-  const typeLowers = new Array<string>(len);
-  const subtypesLowers = new Array<string>(len);
+  const typeLowers = preLowerTypeLines ? (preLowerTypeLines as string[]) : new Array<string>(len);
+  const subtypesLowers = preSubtypesLowers ? (preSubtypesLowers as string[]) : new Array<string>(len);
   const keywordLowers = new Array<string>(len);
   const freeSacFlags = new Uint8Array(len);
   const ownCastSpellPayoffFlags = new Uint8Array(len);
@@ -606,361 +1068,65 @@ export function buildRippleIndex(
   const kindredGenericFlags = new Uint8Array(len);
   const staxFlags = new Uint8Array(len);
   const theftFlags = new Uint8Array(len);
+  const changelingFlags = new Uint8Array(len);
+
+  const collectionPrecomputed =
+    len >= 32 &&
+    (cards[0]?.rEn !== undefined ||
+      cards[1]?.rEn !== undefined ||
+      cards[2]?.rEn !== undefined);
 
   for (let i = 0; i < len; i++) {
     const card = cards[i]!;
-    const { rawLower, cleanLower, typeLower } = normalizePreservingNewlines(
-      card,
-      preLowerOracles?.[i],
-      preLowerTypeLines?.[i],
-    );
-    cleanLowers[i] = cleanLower;
-    typeLowers[i] = typeLower;
-    subtypesLowers[i] = preSubtypesLowers?.[i] ?? extractSubtypesLowerFast(typeLower);
+    const hasPrecomputed =
+      collectionPrecomputed ||
+      card.rEn !== undefined ||
+      card.rPay !== undefined ||
+      card.rFlg !== undefined;
+
+    if (hasPrecomputed) {
+      enablerMasks[i] = card.rEn ?? 0;
+      payoffMasks[i] = card.rPay ?? 0;
+      const flg = card.rFlg ?? 0;
+      if (flg !== 0) {
+        if ((flg & RIPPLE_FLAG_FREE_SAC) !== 0) freeSacFlags[i] = 1;
+        if ((flg & RIPPLE_FLAG_OWN_CAST_SPELL) !== 0) ownCastSpellPayoffFlags[i] = 1;
+        if ((flg & RIPPLE_FLAG_LANDFALL_TRIGGER) !== 0) landfallTriggerFlags[i] = 1;
+        if ((flg & RIPPLE_FLAG_KINDRED_GENERIC) !== 0) kindredGenericFlags[i] = 1;
+        if ((flg & RIPPLE_FLAG_STAX) !== 0) staxFlags[i] = 1;
+        if ((flg & RIPPLE_FLAG_THEFT) !== 0) theftFlags[i] = 1;
+        if ((flg & RIPPLE_FLAG_CHANGELING) !== 0) changelingFlags[i] = 1;
+      }
+      if (!preLowerTypeLines) {
+        typeLowers[i] = card.typeLine.toLowerCase();
+      }
+      if (!preSubtypesLowers) {
+        subtypesLowers[i] = extractSubtypesLowerFast(typeLowers[i]!);
+      }
+      continue;
+    }
+
+    const computed = computeCardRippleMasks(card, preLowerOracles?.[i], preLowerTypeLines?.[i]);
+    enablerMasks[i] = computed.rEn;
+    payoffMasks[i] = computed.rPay;
+    if ((computed.rFlg & RIPPLE_FLAG_FREE_SAC) !== 0) freeSacFlags[i] = 1;
+    if ((computed.rFlg & RIPPLE_FLAG_OWN_CAST_SPELL) !== 0) ownCastSpellPayoffFlags[i] = 1;
+    if ((computed.rFlg & RIPPLE_FLAG_LANDFALL_TRIGGER) !== 0) landfallTriggerFlags[i] = 1;
+    if ((computed.rFlg & RIPPLE_FLAG_KINDRED_GENERIC) !== 0) kindredGenericFlags[i] = 1;
+    if ((computed.rFlg & RIPPLE_FLAG_STAX) !== 0) staxFlags[i] = 1;
+    if ((computed.rFlg & RIPPLE_FLAG_THEFT) !== 0) theftFlags[i] = 1;
+    if ((computed.rFlg & RIPPLE_FLAG_CHANGELING) !== 0) changelingFlags[i] = 1;
+    cleanLowers[i] = computed.cleanLower;
+    condLowers[i] = computed.condLower;
+    multLowers[i] = computed.multLower;
+    if (!preLowerTypeLines) {
+      typeLowers[i] = computed.typeLower;
+    }
+    if (!preSubtypesLowers) {
+      subtypesLowers[i] = extractSubtypesLowerFast(computed.typeLower);
+    }
     keywordLowers[i] =
       card.keywords.length > 0 ? card.keywords.join(' ').toLowerCase() : '';
-    const themes = card.themes;
-    const roles = card.roles;
-
-    const isCreature = typeLower.includes('creature');
-    const isArtifact = typeLower.includes('artifact');
-    const isEnchantment = typeLower.includes('enchantment');
-    const isInstant = typeLower.includes('instant');
-    const isSorcery = typeLower.includes('sorcery');
-    const isLand = typeLower.includes('land');
-    const isPlaneswalker = typeLower.includes('planeswalker');
-    const isSaga = typeLower.includes('saga');
-
-    if (RE_KINDRED_PAYOFF.test(cleanLower) || typeLower.includes('kindred')) {
-      kindredGenericFlags[i] = 1;
-    }
-    if (themes.includes('stax') || (cleanLower.includes('cost') || cleanLower.includes("can't") || cleanLower.includes("don't untap")) && RE_STAX_RULE.test(cleanLower)) {
-      staxFlags[i] = 1;
-    }
-    if (themes.includes('theft') || ((cleanLower.includes('control') || cleanLower.includes('opponent')) && RE_THEFT_RULE.test(cleanLower))) {
-      theftFlags[i] = 1;
-    }
-
-    let em = 0;
-    let pm = 0;
-    let ownCondCorpus = '';
-    let condCorpus = '';
-    let multCorpus = '';
-
-    if (
-      cleanLower.includes('when') ||
-      cleanLower.includes(':') ||
-      cleanLower.includes('at the beginning') ||
-      cleanLower.includes('additional') ||
-      cleanLower.includes('for each') ||
-      cleanLower.includes('twice') ||
-      cleanLower.includes('number of')
-    ) {
-      const lines = cleanLower.split('\n');
-      for (let l = 0; l < lines.length; l++) {
-        const line = lines[l]!;
-        if (!line) continue;
-        if (
-          line.includes('additional') ||
-          line.includes('twice') ||
-          line.includes('double') ||
-          line.includes('triple') ||
-          line.includes('instead') ||
-          line.includes('for each') ||
-          line.includes('number of') ||
-          line.includes('equal to') ||
-          line.includes('less to cast')
-        ) {
-          multCorpus += `${line} `;
-        }
-        const trig = RE_TRIG_LINE.exec(line);
-        if (trig) {
-          const cnd = trig[1]!;
-          condCorpus += `${cnd} `;
-          if (!cnd.includes('opponent')) ownCondCorpus += `${cnd} `;
-          continue;
-        }
-        if (RE_ACT_LINE.test(line)) {
-          continue;
-        }
-        const step = RE_STEP_LINE.exec(line);
-        if (step && step[1]) {
-          condCorpus += `${step[1]} `;
-          ownCondCorpus += `${step[1]} `;
-        }
-      }
-    }
-
-    // --- ENABLER BITS (What the card supplies / produces / fuels) ---
-    if (cleanLower.includes('sacrific')) {
-      if (RE_SAC_OUTLET.test(cleanLower)) em |= 1 << MECHANIC_BITS.SAC_OUTLET;
-      if (RE_FREE_SAC_ACTIVATED.test(cleanLower)) freeSacFlags[i] = 1;
-      if (RE_SAC_PERM.test(cleanLower)) em |= 1 << MECHANIC_BITS.SAC_PERMANENT_FODDER;
-    }
-    if (themes.includes('sac-outlet')) em |= 1 << MECHANIC_BITS.SAC_PERMANENT_FODDER;
-    if (isCreature && (RE_CREATURE_SELF_SAC.test(rawLower) || RE_CREATURE_DIES.test(cleanLower))) {
-      em |= 1 << MECHANIC_BITS.CREATURE_DIES_FODDER;
-    }
-    if (
-      themes.includes('token-generator') ||
-      ((cleanLower.includes('token') ||
-        cleanLower.includes('populate') ||
-        cleanLower.includes('myriad') ||
-        cleanLower.includes('squad') ||
-        cleanLower.includes('offspring') ||
-        cleanLower.includes('amass') ||
-        cleanLower.includes('investigate')) &&
-        RE_TOKEN_MAKE.test(cleanLower))
-    ) {
-      em |= 1 << MECHANIC_BITS.TOKENS;
-      if (cleanLower.includes('creature token') || cleanLower.includes('populate')) {
-        em |= 1 << MECHANIC_BITS.CREATURE_DIES_FODDER;
-      }
-    }
-    if (themes.includes('treasure') || (cleanLower.includes('treasure') && RE_TREASURE_MAKE.test(cleanLower))) {
-      em |=
-        (1 << MECHANIC_BITS.TREASURE) |
-        (1 << MECHANIC_BITS.SAC_PERMANENT_FODDER) |
-        (1 << MECHANIC_BITS.ARTIFACTS_MATTER);
-    }
-    if (!isLand && (isCreature || isArtifact || isEnchantment) && cleanLower.includes('when ~ enters')) {
-      em |= 1 << MECHANIC_BITS.ETB_TRIGGER;
-    }
-    if (themes.includes('blink') || (cleanLower.includes('exile') && RE_BLINK.test(cleanLower))) {
-      em |= 1 << MECHANIC_BITS.BLINK_FLICKER;
-    }
-    if (
-      themes.includes('plus-one-counters') ||
-      (cleanLower.includes('+1/+1') && RE_PLUS1_GEN.test(cleanLower)) ||
-      /\bbolster\b|\bevolve\b|\bconnive\b|\bexplore\b/.test(cleanLower)
-    ) {
-      em |= (1 << MECHANIC_BITS.PLUS1_COUNTERS) | (1 << MECHANIC_BITS.PROLIFERATE_COUNTERS);
-    }
-    if (
-      isPlaneswalker ||
-      isSaga ||
-      (rawLower.includes('counter') && RE_COUNTERS_ANY.test(rawLower)) ||
-      rawLower.includes('toxic') ||
-      rawLower.includes('infect')
-    ) {
-      em |= 1 << MECHANIC_BITS.PROLIFERATE_COUNTERS;
-    }
-    if (
-      themes.includes('mill') ||
-      ((rawLower.includes('mill') ||
-        rawLower.includes('surveil') ||
-        rawLower.includes('dredge') ||
-        rawLower.includes('graveyard')) &&
-        RE_GY_FILL.test(rawLower))
-    ) {
-      em |= 1 << MECHANIC_BITS.GRAVEYARD_FILL;
-    }
-    if (
-      themes.includes('reanimator') ||
-      roles.includes('recursion') ||
-      (cleanLower.includes('graveyard') && RE_REANIMATE.test(cleanLower))
-    ) {
-      em |= 1 << MECHANIC_BITS.REANIMATE_RECUR;
-    }
-    if ((isInstant || isSorcery) && card.cmc <= 4) {
-      em |= 1 << MECHANIC_BITS.INSTANT_SORCERY;
-    }
-    if (RE_SPELL_COPY.test(rawLower)) {
-      em |= 1 << MECHANIC_BITS.SPELL_COPY_FORK;
-      if (isInstant || isSorcery) em |= 1 << MECHANIC_BITS.INSTANT_SORCERY;
-    }
-    if (isArtifact || (cleanLower.includes('token') && RE_ART_TOKENS.test(cleanLower))) {
-      em |= 1 << MECHANIC_BITS.ARTIFACTS_MATTER;
-    }
-    if (isEnchantment) em |= 1 << MECHANIC_BITS.ENCHANTMENTS_MATTER;
-    if (RE_EXILE_EN.test(rawLower)) em |= 1 << MECHANIC_BITS.EXILE_CAST;
-    if (
-      themes.includes('wheels') ||
-      ((rawLower.includes('discard') || rawLower.includes('connive') || rawLower.includes('blood token')) &&
-        RE_DISCARD_EN.test(rawLower))
-    ) {
-      em |= 1 << MECHANIC_BITS.DISCARD_MADNESS;
-    }
-    if (roles.includes('draw') || themes.includes('wheels')) {
-      em |= 1 << MECHANIC_BITS.CARD_DRAW;
-    }
-    if (cleanLower.includes('life') && RE_LIFE_REPEAT.test(cleanLower) && RE_LIFE_VAL.test(cleanLower)) {
-      em |= 1 << MECHANIC_BITS.LIFEGAIN;
-    }
-    if (
-      (isLand && cleanLower.includes('sacrific') && cleanLower.includes('search your library')) ||
-      (cleanLower.includes('land') && RE_LAND_RAMP.test(cleanLower))
-    ) {
-      em |= 1 << MECHANIC_BITS.LANDFALL_LANDS;
-    }
-    if (themes.includes('extra-combat') || RE_ATK_EN.test(rawLower)) {
-      em |= 1 << MECHANIC_BITS.ATTACK_COMBAT;
-    }
-    if (
-      RE_EVADE_EN.test(rawLower) ||
-      (isCreature &&
-        card.cmc <= 3 &&
-        (card.keywords.includes('Flying') ||
-          card.keywords.includes('Menace') ||
-          card.keywords.includes('Shadow') ||
-          card.keywords.includes('Skulk')))
-    ) {
-      em |= 1 << MECHANIC_BITS.COMBAT_DAMAGE_EVASION;
-    }
-    if (typeLower.includes('equipment') || typeLower.includes('aura')) {
-      em |= 1 << MECHANIC_BITS.EQUIPMENT_AURA;
-    }
-    if ((cleanLower.includes('untap') || cleanLower.includes('haste')) && RE_UNTAP_EN.test(cleanLower)) {
-      em |= 1 << MECHANIC_BITS.TAP_UNTAP;
-    }
-    if (
-      themes.includes('burn') ||
-      ((cleanLower.includes('damage') || cleanLower.includes('loses')) &&
-        RE_BURN_EN.test(cleanLower) &&
-        (cleanLower.includes('whenever') || cleanLower.includes('at the beginning') || cleanLower.includes('{t}:')))
-    ) {
-      em |= 1 << MECHANIC_BITS.BURN_DRAIN;
-    }
-    if (themes.includes('clone') || (cleanLower.includes('copy') && RE_CLONE_EN.test(cleanLower))) {
-      em |= 1 << MECHANIC_BITS.CLONE_COPY;
-    }
-    if (RE_TOPDECK_EN.test(rawLower)) em |= 1 << MECHANIC_BITS.TOPDECK_MATTERS;
-    if (isCreature && card.cmc >= 4) em |= 1 << MECHANIC_BITS.BIG_CREATURE_POWER;
-    if (roles.includes('ramp') || RE_COST_RED.test(cleanLower)) {
-      em |= 1 << MECHANIC_BITS.COST_REDUCTION_BIG_MANA;
-    }
-    if (roles.includes('protection') || RE_PROT_EN.test(cleanLower)) {
-      em |= 1 << MECHANIC_BITS.PROTECTION_INDESTRUCTIBLE;
-    }
-
-    // --- PAYOFF BITS (What the card triggers on, multiplies, or scales with) ---
-    const condAndMult = `${ownCondCorpus} ${multCorpus}`;
-    if (
-      ownCondCorpus.includes('sacrifice') ||
-      (multCorpus.includes('sacrificed') && RE_PAY_SAC_MULT.test(multCorpus))
-    ) {
-      pm |= 1 << MECHANIC_BITS.SAC_PERMANENT_FODDER;
-      if (ownCondCorpus.includes('creature') || ownCondCorpus.includes('permanent')) {
-        pm |= 1 << MECHANIC_BITS.SAC_OUTLET;
-      }
-    }
-    if (
-      (condCorpus.includes('dies') || multCorpus.includes('dying') || multCorpus.includes('died')) &&
-      RE_PAY_DIES_COND.test(`${condCorpus} ${multCorpus}`)
-    ) {
-      pm |= (1 << MECHANIC_BITS.CREATURE_DIES_FODDER) | (1 << MECHANIC_BITS.SAC_OUTLET);
-    }
-    if ((condAndMult.includes('token') && !/^~$/.test(condCorpus.trim())) || RE_PAY_TOKENS.test(cleanLower)) {
-      pm |= 1 << MECHANIC_BITS.TOKENS;
-    }
-    if (ownCondCorpus.includes('artifact') || ownCondCorpus.includes('treasure') || RE_PAY_ARTIFACTS.test(cleanLower)) {
-      pm |= (1 << MECHANIC_BITS.TREASURE) | (1 << MECHANIC_BITS.ARTIFACTS_MATTER);
-    }
-    if (RE_PAY_ETB_DOUB.test(cleanLower) || RE_PAY_ETB_TRIG.test(ownCondCorpus)) {
-      pm |= (1 << MECHANIC_BITS.ETB_TRIGGER) | (1 << MECHANIC_BITS.BLINK_FLICKER);
-    }
-    if (
-      ownCondCorpus.includes('+1/+1 counter') ||
-      (cleanLower.includes('+1/+1 counter') && RE_PAY_PLUS1_MULT.test(cleanLower))
-    ) {
-      pm |= 1 << MECHANIC_BITS.PLUS1_COUNTERS;
-    }
-    if (cleanLower.includes('proliferate') || (cleanLower.includes('counter') && RE_PAY_PROLIF.test(cleanLower))) {
-      pm |= 1 << MECHANIC_BITS.PROLIFERATE_COUNTERS;
-    }
-    if (ownCondCorpus.includes('graveyard') || ownCondCorpus.includes('milled') || RE_PAY_GY.test(rawLower)) {
-      pm |= (1 << MECHANIC_BITS.GRAVEYARD_FILL) | (1 << MECHANIC_BITS.REANIMATE_RECUR);
-    }
-    if (
-      !isInstant &&
-      !isSorcery &&
-      (RE_PAY_SPELL_COND.test(condAndMult) || RE_PAY_PROWESS.test(rawLower))
-    ) {
-      pm |= 1 << MECHANIC_BITS.INSTANT_SORCERY;
-      if (ownCondCorpus.includes('instant or sorcery') || rawLower.includes('magecraft')) {
-        ownCastSpellPayoffFlags[i] = 1;
-      }
-    }
-    if (
-      ownCondCorpus.includes('copy') ||
-      cleanLower.includes('instant or sorcery spell causes a triggered ability')
-    ) {
-      pm |= 1 << MECHANIC_BITS.SPELL_COPY_FORK;
-    }
-    if (
-      condAndMult.includes('enchantment') ||
-      condAndMult.includes('aura') ||
-      condAndMult.includes('saga') ||
-      RE_PAY_ENCH.test(cleanLower)
-    ) {
-      pm |= 1 << MECHANIC_BITS.ENCHANTMENTS_MATTER;
-    }
-    if (RE_PAY_EXILE.test(condAndMult)) pm |= 1 << MECHANIC_BITS.EXILE_CAST;
-    if (ownCondCorpus.includes('discard') || rawLower.includes('madness')) {
-      pm |= 1 << MECHANIC_BITS.DISCARD_MADNESS;
-    }
-    if (RE_PAY_DRAW_COND.test(ownCondCorpus) || RE_PAY_DRAW_MULT.test(cleanLower)) {
-      pm |= 1 << MECHANIC_BITS.CARD_DRAW;
-    }
-    if (RE_PAY_LIFE_COND.test(ownCondCorpus) || RE_PAY_LIFE_MULT.test(cleanLower)) {
-      pm |= 1 << MECHANIC_BITS.LIFEGAIN;
-    }
-    if (RE_PAY_LAND_COND.test(ownCondCorpus) || rawLower.includes('landfall') || RE_PAY_LAND_MULT.test(cleanLower)) {
-      pm |= 1 << MECHANIC_BITS.LANDFALL_LANDS;
-      if (rawLower.includes('landfall') || RE_PAY_LAND_COND.test(ownCondCorpus)) {
-        landfallTriggerFlags[i] = 1;
-      }
-    }
-    if (
-      RE_PAY_ATK_COND.test(ownCondCorpus) ||
-      cleanLower.includes('creature attacking causes') ||
-      cleanLower.includes('additional combat phase')
-    ) {
-      pm |= 1 << MECHANIC_BITS.ATTACK_COMBAT;
-    }
-    if (ownCondCorpus.includes('deals combat damage') || RE_PAY_DMG_MULT.test(cleanLower)) {
-      pm |= 1 << MECHANIC_BITS.COMBAT_DAMAGE_EVASION;
-    }
-    if (
-      condAndMult.includes('equipment') ||
-      condAndMult.includes('aura') ||
-      condAndMult.includes('equipped') ||
-      condAndMult.includes('enchanted') ||
-      RE_PAY_EQUIP_FREE.test(cleanLower)
-    ) {
-      pm |= 1 << MECHANIC_BITS.EQUIPMENT_AURA;
-    }
-    if (
-      (ownCondCorpus.includes('becomes tapped') ||
-        ownCondCorpus.includes('untap') ||
-        cleanLower.includes('activated abilities')) &&
-      (cleanLower.includes('untap') || cleanLower.includes('copied') || cleanLower.includes('inspired'))
-    ) {
-      pm |= 1 << MECHANIC_BITS.TAP_UNTAP;
-    }
-    if (condCorpus.includes('opponent loses life') || condCorpus.includes('noncombat damage') || RE_PAY_BURN_MULT.test(cleanLower)) {
-      pm |= 1 << MECHANIC_BITS.BURN_DRAIN;
-    }
-    if (
-      cleanLower.includes('additional time') ||
-      cleanLower.includes('activated abilities of creatures you control are copied') ||
-      cleanLower.includes('copy target triggered ability')
-    ) {
-      pm |= 1 << MECHANIC_BITS.CLONE_COPY;
-    }
-    if (RE_PAY_TOPDECK.test(cleanLower)) pm |= 1 << MECHANIC_BITS.TOPDECK_MATTERS;
-    if (cleanLower.includes('power') && RE_PAY_POWER.test(cleanLower)) {
-      pm |= 1 << MECHANIC_BITS.BIG_CREATURE_POWER;
-    }
-    if (card.cmc >= 7 || card.manaCost.includes('{X}')) {
-      pm |= 1 << MECHANIC_BITS.COST_REDUCTION_BIG_MANA;
-    }
-    if (roles.includes('wipe')) pm |= 1 << MECHANIC_BITS.PROTECTION_INDESTRUCTIBLE;
-
-    enablerMasks[i] = em;
-    payoffMasks[i] = pm;
-    condLowers[i] = condCorpus ? condCorpus.trim() : '';
-    multLowers[i] = multCorpus ? multCorpus.trim() : '';
   }
 
   return {
@@ -978,6 +1144,11 @@ export function buildRippleIndex(
     kindredGenericFlags,
     staxFlags,
     theftFlags,
+    changelingFlags,
+    rawLowers: preLowerOracles ?? new Array<string>(len),
+    cards,
+    subtypeMaskCache: new Map<string, Uint8Array>(),
+    customTermMaskCache: new Map<string, Uint8Array>(),
   };
 }
 
@@ -2358,25 +2529,81 @@ const PURE_TYPE_ENABLER_BITS =
   (1 << MECHANIC_BITS.ARTIFACTS_MATTER) |
   (1 << MECHANIC_BITS.ENCHANTMENTS_MATTER);
 
+function ensureCardParsedStrings(index: RippleIndex, idx: number): void {
+  if (index.cleanLowers[idx] !== undefined) return;
+  const card = index.cards?.[idx];
+  if (!card) {
+    index.cleanLowers[idx] = '';
+    index.condLowers[idx] = '';
+    index.multLowers[idx] = '';
+    index.keywordLowers[idx] = '';
+    return;
+  }
+  const rawLower = index.rawLowers?.[idx];
+  const typeLower = index.typeLowers[idx];
+  const { cleanLower, condCorpus, multCorpus } = extractCardRippleCorpora(
+    card,
+    rawLower,
+    typeLower,
+  );
+  index.cleanLowers[idx] = cleanLower;
+  index.condLowers[idx] = condCorpus ? condCorpus.trim() : '';
+  index.multLowers[idx] = multCorpus ? multCorpus.trim() : '';
+  index.keywordLowers[idx] =
+    card.keywords.length > 0 ? card.keywords.join(' ').toLowerCase() : '';
+}
+
+function getRawOracleLower(index: RippleIndex, idx: number): string {
+  const pre = index.rawLowers?.[idx];
+  if (pre !== undefined) return pre;
+  const clean = index.cleanLowers[idx];
+  if (clean !== undefined) return clean;
+  const card = index.cards?.[idx];
+  if (!card) return '';
+  const lower = card.oracleText.length === 0 ? '' : card.oracleText.toLowerCase();
+  if (index.rawLowers) {
+    (index.rawLowers as string[])[idx] = lower;
+  }
+  return lower;
+}
+
+function cardKeywordsHaveStem(index: RippleIndex, idx: number, stem: string): boolean {
+  const kwLow = index.keywordLowers[idx];
+  if (kwLow !== undefined) return kwLow.includes(stem);
+  const kws = index.cards?.[idx]?.keywords;
+  if (!kws || kws.length === 0) return false;
+  for (let k = 0; k < kws.length; k++) {
+    if (kws[k]!.toLowerCase().includes(stem)) return true;
+  }
+  return false;
+}
+
 function matchesSubtypeEnabler(
   subLower: string,
   oLow: string,
   compiled: CompiledSubtypeMatcher,
+  changelingFlag?: number,
 ): boolean {
   if (
     subLower &&
-    (subLower.includes(compiled.stem1) || (compiled.stem2 !== compiled.stem1 && subLower.includes(compiled.stem2))) &&
+    (subLower.includes(compiled.stem1) ||
+      (compiled.stem2 !== compiled.stem1 && subLower.includes(compiled.stem2))) &&
     compiled.wordRe.test(subLower)
   ) {
     return true;
   }
-  if (compiled.isCreatureTribe && oLow.includes('changeling')) {
-    return true;
+  if (compiled.isCreatureTribe) {
+    if (changelingFlag !== undefined) {
+      if (changelingFlag === 1) return true;
+    } else if (oLow.includes('changeling')) {
+      return true;
+    }
   }
   if (
     oLow.includes('token') &&
     oLow.includes('create ') &&
-    (oLow.includes(compiled.stem1) || (compiled.stem2 !== compiled.stem1 && oLow.includes(compiled.stem2))) &&
+    (oLow.includes(compiled.stem1) ||
+      (compiled.stem2 !== compiled.stem1 && oLow.includes(compiled.stem2))) &&
     compiled.tokenMakeRe.test(oLow)
   ) {
     return true;
@@ -2393,13 +2620,125 @@ function matchesSubtypePayoff(
   if (compiled.isCreatureTribe && kindredFlag === 1) return true;
   if (
     oLow.length > 0 &&
-    (oLow.includes(compiled.stem1) || (compiled.stem2 !== compiled.stem1 && oLow.includes(compiled.stem2)))
+    (oLow.includes(compiled.stem1) ||
+      (compiled.stem2 !== compiled.stem1 && oLow.includes(compiled.stem2)))
   ) {
-    return tLow.includes('creature')
-      ? compiled.careRe.test(oLow)
-      : compiled.wordRe.test(oLow);
+    if (!compiled.wordRe.test(oLow)) return false;
+    return tLow.includes('creature') ? compiled.careRe.test(oLow) : true;
   }
   return false;
+}
+
+function getSubtypeMaskArray(index: RippleIndex, comp: CompiledSubtypeMatcher): Uint8Array {
+  const cacheKey = `${comp.subLower}:${comp.isCreatureTribe ? 1 : 0}`;
+  const cached = index.subtypeMaskCache?.get(cacheKey);
+  if (cached) return cached;
+
+  const len = index.enablerMasks.length;
+  const arr = new Uint8Array(len);
+  const stem1 = comp.stem1;
+  const stem2 = comp.stem2;
+  const hasAltStem = stem2 !== stem1;
+  const isTribe = comp.isCreatureTribe;
+  const hasChangelingFlags = index.changelingFlags !== undefined;
+
+  for (let i = 0; i < len; i++) {
+    let m = 0;
+    const subLow = index.subtypesLowers[i]!;
+    const kindredFlag = index.kindredGenericFlags[i]!;
+    const chFlag = hasChangelingFlags ? index.changelingFlags![i]! : undefined;
+
+    if (
+      subLow &&
+      (subLow.includes(stem1) || (hasAltStem && subLow.includes(stem2))) &&
+      comp.wordRe.test(subLow)
+    ) {
+      m |= 1;
+    } else if (isTribe && chFlag === 1) {
+      m |= 1;
+    }
+
+    if (isTribe && kindredFlag === 1) {
+      m |= 2;
+    }
+
+    if (m !== 3) {
+      const rawLow = getRawOracleLower(index, i);
+      if (
+        rawLow.length > 0 &&
+        (rawLow.includes(stem1) || (hasAltStem && rawLow.includes(stem2)))
+      ) {
+        ensureCardParsedStrings(index, i);
+        const oLow = index.cleanLowers[i]!;
+        if ((m & 1) === 0 && matchesSubtypeEnabler('', oLow, comp, chFlag)) {
+          m |= 1;
+        }
+        if (
+          (m & 2) === 0 &&
+          matchesSubtypePayoff(index.typeLowers[i]!, oLow, kindredFlag, comp)
+        ) {
+          m |= 2;
+        }
+      } else if ((m & 1) === 0 && isTribe && chFlag === undefined) {
+        const oLow = index.cleanLowers[i];
+        if (oLow && oLow.includes('changeling')) {
+          m |= 1;
+        }
+      }
+    }
+
+    arr[i] = m;
+  }
+
+  index.subtypeMaskCache?.set(cacheKey, arr);
+  return arr;
+}
+
+function getCustomTermMaskArray(
+  index: RippleIndex,
+  term: CompiledCustomTermMatcher,
+): Uint8Array {
+  const cached = index.customTermMaskCache?.get(term.raw);
+  if (cached) return cached;
+
+  const len = index.enablerMasks.length;
+  const arr = new Uint8Array(len);
+  const stem = term.stem;
+
+  for (let i = 0; i < len; i++) {
+    const tLow = index.typeLowers[i]!;
+    const rawLow = getRawOracleLower(index, i);
+    const maybeMatches =
+      rawLow.includes(stem) || tLow.includes(stem) || cardKeywordsHaveStem(index, i, stem);
+    if (!maybeMatches) continue;
+
+    ensureCardParsedStrings(index, i);
+    const oLow = index.cleanLowers[i]!;
+    const kwLow = index.keywordLowers[i]!;
+    const hasStem = oLow.includes(stem) || kwLow.includes(stem) || tLow.includes(stem);
+    if (!hasStem) continue;
+
+    const inKeywords = kwLow.length > 0 && term.wordRe.test(kwLow);
+    const inType = term.wordRe.test(tLow);
+    const inOracle = oLow.length > 0 && term.wordRe.test(oLow);
+    if (!inKeywords && !inType && !inOracle) continue;
+
+    const condLow = index.condLowers[i]!;
+    const multLow = index.multLowers[i]!;
+    const isPayoff =
+      (condLow.length > 0 && term.wordRe.test(condLow)) ||
+      (multLow.length > 0 && term.wordRe.test(multLow)) ||
+      (inOracle && term.careRe.test(oLow));
+    const isEnabler = inKeywords || inType || inOracle;
+
+    let m = 0;
+    if (isEnabler) m |= 1;
+    if (isPayoff) m |= 2;
+    arr[i] = m;
+  }
+
+  index.customTermMaskCache?.set(term.raw, arr);
+  return arr;
 }
 
 /**
@@ -2502,22 +2841,18 @@ export function scoreRippleCard(
   let matchedSubtypeEnablerIdx = -1;
   let matchedSubtypePayoffIdx = -1;
   if (matcher.compiledSubtypes.length > 0) {
-    const oLow = index.cleanLowers[idx]!;
-    const subLow = index.subtypesLowers[idx]!;
     const kindredFlag = index.kindredGenericFlags[idx]!;
     for (let s = 0; s < matcher.compiledSubtypes.length; s++) {
       const comp = matcher.compiledSubtypes[s]!;
-      if (matcher.includeTribeEnablers && matchesSubtypeEnabler(subLow, oLow, comp)) {
+      const subMask = getSubtypeMaskArray(index, comp)[idx]!;
+      if (matcher.includeTribeEnablers && (subMask & 1) !== 0) {
         if (matchedSubtypeEnablerIdx === -1) {
           matchedSubtypeEnablerIdx = s;
           enScore += 50;
           if (collectReasons) enReasons.push(`Starter: ${comp.sub} Body`);
         }
       }
-      if (
-        matcher.includeTribePayoffs &&
-        matchesSubtypePayoff(typeLineLower, oLow, kindredFlag, comp)
-      ) {
+      if (matcher.includeTribePayoffs && (subMask & 2) !== 0) {
         if (matchedSubtypePayoffIdx === -1) {
           matchedSubtypePayoffIdx = s;
           payScore += kindredFlag === 1 ? 58 : 66;
@@ -2535,28 +2870,12 @@ export function scoreRippleCard(
 
   let matchedCustomIdx = -1;
   if (matcher.compiledCustomTerms.length > 0) {
-    const oLow = index.cleanLowers[idx]!;
-    const kwLow = index.keywordLowers[idx]!;
-    const condLow = index.condLowers[idx]!;
-    const multLow = index.multLowers[idx]!;
     for (let c = 0; c < matcher.compiledCustomTerms.length; c++) {
       const term = matcher.compiledCustomTerms[c]!;
-      const hasStem =
-        oLow.includes(term.stem) ||
-        kwLow.includes(term.stem) ||
-        typeLineLower.includes(term.stem);
-      if (!hasStem) continue;
-
-      const inKeywords = kwLow.length > 0 && term.wordRe.test(kwLow);
-      const inType = term.wordRe.test(typeLineLower);
-      const inOracle = oLow.length > 0 && term.wordRe.test(oLow);
-      if (!inKeywords && !inType && !inOracle) continue;
-
-      const isPayoff =
-        (condLow.length > 0 && term.wordRe.test(condLow)) ||
-        (multLow.length > 0 && term.wordRe.test(multLow)) ||
-        (inOracle && term.careRe.test(oLow));
-      const isEnabler = inKeywords || inType || inOracle;
+      const customMask = getCustomTermMaskArray(index, term)[idx]!;
+      if (customMask === 0) continue;
+      const isEnabler = (customMask & 1) !== 0;
+      const isPayoff = (customMask & 2) !== 0;
 
       if (isPayoff && (mode !== 'enablers' || matcher.hookKey !== null)) {
         payScore += 52;
@@ -2706,28 +3025,29 @@ export function computeDeckChainBalance(
   let inDeckPayoffs = 0;
 
   for (let i = 0; i < mainboardCards.length; i++) {
-    const tLow = deckIndex.typeLowers[i]!;
-    const subLow = deckIndex.subtypesLowers[i]!;
-    const oLow = deckIndex.cleanLowers[i]!;
-    const kwLow = deckIndex.keywordLowers[i]!;
     const hasEnablerBit = (deckIndex.enablerMasks[i]! & neededEnablerBits) !== 0;
     const hasPayoffBit = (deckIndex.payoffMasks[i]! & neededPayoffBits) !== 0;
 
     let hasTribeStarter = false;
     let hasTribePayoff = false;
     for (const comp of compiledSubtypes) {
-      if (matchesSubtypeEnabler(subLow, oLow, comp)) hasTribeStarter = true;
-      if (matchesSubtypePayoff(tLow, oLow, deckIndex.kindredGenericFlags[i]!, comp)) {
-        hasTribePayoff = true;
-      }
+      const subMask = getSubtypeMaskArray(deckIndex, comp)[i]!;
+      if ((subMask & 1) !== 0) hasTribeStarter = true;
+      if ((subMask & 2) !== 0) hasTribePayoff = true;
     }
 
     let hasCustomStarter = false;
     let hasCustomPayoff = false;
-    for (const term of compiledCustom) {
-      if (term.wordRe.test(kwLow) || term.wordRe.test(oLow) || term.wordRe.test(tLow)) {
-        hasCustomStarter = true;
-        if (term.careRe.test(oLow)) hasCustomPayoff = true;
+    if (compiledCustom.length > 0) {
+      ensureCardParsedStrings(deckIndex, i);
+      const tLow = deckIndex.typeLowers[i]!;
+      const oLow = deckIndex.cleanLowers[i]!;
+      const kwLow = deckIndex.keywordLowers[i]!;
+      for (const term of compiledCustom) {
+        if (term.wordRe.test(kwLow) || term.wordRe.test(oLow) || term.wordRe.test(tLow)) {
+          hasCustomStarter = true;
+          if (term.careRe.test(oLow)) hasCustomPayoff = true;
+        }
       }
     }
 

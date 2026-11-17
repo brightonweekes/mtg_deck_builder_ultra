@@ -4,6 +4,7 @@ import {
   Cloud,
   Crown,
   FolderOpen,
+  Home,
   Layers,
   LayoutDashboard,
   LogIn,
@@ -75,6 +76,7 @@ export function HeaderBar({
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
+    if (activeTab === 'home') return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
@@ -87,8 +89,9 @@ export function HeaderBar({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [activeTab]);
 
+  const isHomeView = activeTab === 'home';
   const isReady = syncStatus.stage === 'ready';
   const combinedIdentity = getCombinedColorIdentity(commanders);
   const canPair = commanders.length === 1 && canHaveSecondCommander(commanders[0]!);
@@ -124,6 +127,18 @@ export function HeaderBar({
           <div className="flex items-center rounded-xl border border-slate-800 bg-slate-900 p-0.5 text-xs">
             <button
               type="button"
+              onClick={() => onTabChange('home')}
+              className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 font-semibold transition ${
+                activeTab === 'home'
+                  ? 'bg-amber-500 text-slate-950'
+                  : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              <Home className="h-3.5 w-3.5" />
+              Home
+            </button>
+            <button
+              type="button"
               onClick={() => onTabChange('search')}
               className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 font-semibold transition ${
                 activeTab === 'search'
@@ -149,37 +164,39 @@ export function HeaderBar({
           </div>
         </div>
 
-        {/* Global Search Box */}
-        <div className="relative min-w-[180px] flex-1 max-w-md">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-          <input
-            ref={searchInputRef}
-            type="text"
-            value={query}
-            onChange={(e) => {
-              onQueryChange(e.target.value);
-              if (activeTab !== 'search' && e.target.value.trim().length > 0) {
-                onTabChange('search');
-              }
-            }}
-            placeholder='Search name, type, or "exact rules text" (press /)'
-            className="w-full rounded-xl border border-slate-700/80 bg-slate-900 py-1.5 pl-9 pr-8 text-sm text-slate-100 placeholder-slate-500 outline-none transition focus:border-amber-400"
-          />
-          {query && (
-            <button
-              type="button"
-              onClick={() => onQueryChange('')}
-              aria-label="Clear search"
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:bg-slate-800 hover:text-slate-100"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
+        {/* Global Search Box (hidden on minimal Home view) */}
+        {!isHomeView && (
+          <div className="relative min-w-[180px] flex-1 max-w-md">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={query}
+              onChange={(e) => {
+                onQueryChange(e.target.value);
+                if (activeTab !== 'search' && e.target.value.trim().length > 0) {
+                  onTabChange('search');
+                }
+              }}
+              placeholder='Search name, type, or "exact rules text" (press /)'
+              className="w-full rounded-xl border border-slate-700/80 bg-slate-900 py-1.5 pl-9 pr-8 text-sm text-slate-100 placeholder-slate-500 outline-none transition focus:border-amber-400"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => onQueryChange('')}
+                aria-label="Clear search"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:bg-slate-800 hover:text-slate-100"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        )}
 
-        {/* Right Actions: Commander Pill, Deck Drawer */}
+        {/* Right Actions: Commander Pill, Audit, Decks, Deck Drawer, Friends, Account */}
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {commanders.length > 0 && (
+          {!isHomeView && commanders.length > 0 && (
             <div className="flex items-center gap-2 rounded-xl border border-amber-500/35 bg-amber-500/10 px-2.5 py-1 text-xs">
               <Crown className="h-3.5 w-3.5 shrink-0 text-amber-300" />
               <span className="max-w-[170px] truncate font-semibold text-amber-100">
@@ -220,7 +237,7 @@ export function HeaderBar({
             </div>
           )}
 
-          {onOpenAudit && (
+          {!isHomeView && onOpenAudit && (
             <button
               type="button"
               onClick={onOpenAudit}
@@ -242,25 +259,27 @@ export function HeaderBar({
             <span className="hidden sm:inline">Decks</span>
           </button>
 
-          <button
-            type="button"
-            onClick={onOpenDeckDrawer}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-100 transition hover:border-amber-400/60 hover:text-amber-200"
-          >
-            <Layers className="h-4 w-4 text-amber-400" />
-            <span>Deck</span>
-            <span
-              className={`rounded-md px-1.5 py-0.5 font-mono text-[11px] ${
-                totalDeckCards === 100
-                  ? 'bg-emerald-500/20 text-emerald-300'
-                  : totalDeckCards > 100
-                    ? 'bg-rose-500/20 text-rose-300'
-                    : 'bg-slate-800 text-slate-300'
-              }`}
+          {!isHomeView && (
+            <button
+              type="button"
+              onClick={onOpenDeckDrawer}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-100 transition hover:border-amber-400/60 hover:text-amber-200"
             >
-              {totalDeckCards}/100
-            </span>
-          </button>
+              <Layers className="h-4 w-4 text-amber-400" />
+              <span>Deck</span>
+              <span
+                className={`rounded-md px-1.5 py-0.5 font-mono text-[11px] ${
+                  totalDeckCards === 100
+                    ? 'bg-emerald-500/20 text-emerald-300'
+                    : totalDeckCards > 100
+                      ? 'bg-rose-500/20 text-rose-300'
+                      : 'bg-slate-800 text-slate-300'
+                }`}
+              >
+                {totalDeckCards}/100
+              </span>
+            </button>
+          )}
 
           {onOpenFriends && (
             <button

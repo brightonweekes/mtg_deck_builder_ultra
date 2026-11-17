@@ -5,6 +5,7 @@ import type {
   PartnerCategory,
   ScryfallRawCard,
 } from '../../src/types/card.js';
+import { computeCardRippleMasks } from '../../src/search/rippleEngine.js';
 import { stripReminderText, tagCard } from './method-a-tagger.js';
 
 export const EXCLUDED_LAYOUTS = new Set([
@@ -366,6 +367,11 @@ export function normalizeCard(
   if (eligibility.partnerType) compact.partnerType = eligibility.partnerType;
   if (eligibility.partnerWithName) compact.partnerWithName = eligibility.partnerWithName;
   if (maxCopies !== undefined) compact.maxCopies = maxCopies;
+
+  const { rEn, rPay, rFlg } = computeCardRippleMasks(compact);
+  if (rEn !== 0) compact.rEn = rEn;
+  if (rPay !== 0) compact.rPay = rPay;
+  if (rFlg !== 0) compact.rFlg = rFlg;
 
   return compact;
 }

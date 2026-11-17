@@ -4,6 +4,7 @@ import {
   cardDb,
   clearCardCatalogCache,
   DEFAULT_CARD_DB_NAME,
+  MANIFEST_KEY,
   MtgCardDatabase,
   SNAPSHOT_KEY,
   syncCardCatalog,
@@ -300,5 +301,114 @@ describe('cardDb IndexedDB Sync Service', () => {
 
     const stored = await db.catalogSnapshots.get(SNAPSHOT_KEY);
     expect(stored?.cards[0]?.imageSmall).toBe('https://cards.scryfall.io/small/front/a/b/esika.jpg');
+  });
+
+  it('falls back immediately to cached snapshot when manifest check exceeds manifestTimeoutMs', async () => {
+    const db = createTestDb('manifest-timeout');
+    const cachedCard: CompactCard = {
+      ...makeSampleCard('timeout-1', 'Sol Ring'),
+      rEn: 0,
+      rPay: 0,
+      rFlg: 0,
+    };
+    const manifest = makeManifest('v-timeout-1', [cachedCard]);
+
+    await db.catalogSnapshots.put({
+      id: SNAPSHOT_KEY,
+      version: 'v-timeout-1',
+      savedAt: '2026-11-14T00:00:00.000Z',
+      cards: [cachedCard],
+    });
+    await db.meta.put({ key: MANIFEST_KEY, value: manifest });
+
+    const hangingFetch = vi.fn(
+      () =>
+        new Promise<Response>(() => {
+          // Intentionally never settles to simulate lie-fi / stalled gateway
+        }),
+    );
+
+    const t0 = performance.now();
+    const res = await syncCardCatalog({
+      db,
+      fetchImpl: hangingFetch as unknown as typeof fetch,
+      manifestTimeoutMs: 25,
+    });
+    const elapsed = performance.now() - t0;
+
+    expect(res.fromCache).toBe(true);
+    expect(res.manifest.version).toBe('v-timeout-1');
+    expect(res.cards).toHaveLength(1);
+    expect(res.cards[0]!.name).toBe('Sol Ring');
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  it('skips manifest fetch when navigator.onLine is false and valid cache exists without custom fetchImpl', async () => {
+    const db = createTestDb('navigator-offline');
+    const cachedCard: CompactCard = {
+      ...makeSampleCard('offline-1', 'Arcane Signet'),
+      rEn: 0,
+      rPay: 0,
+      rFlg: 0,
+    };
+    const manifest = makeManifest('v-offline-nav', [cachedCard]);
+
+    await db.catalogSnapshots.put({
+      id: SNAPSHOT_KEY,
+      version: 'v-offline-nav',
+      savedAt: '2026-11-14T00:00:00.000Z',
+      cards: [cachedCard],
+    });
+    await db.meta.put({ key: MANIFEST_KEY, value: manifest });
+
+    const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis.navigator, 'onLine');
+    Object.defineProperty(globalThis.navigator, 'onLine', {
+      configurable: true,
+      get: () => false,
+    });
+    const globalFetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    try {
+      const res = await syncCardCatalog({ db });
+      expect(res.fromCache).toBe(true);
+      expect(res.cards).toHaveLength(1);
+      expect(res.cards[0]!.name).toBe('Arcane Signet');
+      expect(globalFetchSpy).not.toHaveBeenCalled();
+    } finally {
+      globalFetchSpy.mockRestore();
+      if (originalDescriptor) {
+        Object.defineProperty(globalThis.navigator, 'onLine', originalDescriptor);
+      } else {
+        delete (globalThis.navigator as unknown as Record<string, unknown>).onLine;
+      }
+    }
+  });
+
+  it('hydrates legacy cached snapshots missing imageSmall or precomputed Ripple masks', async () => {
+    const db = createTestDb('legacy-hydration');
+    const legacyCard = {
+      ...makeSampleCard('legacy-1', 'Command Tower'),
+    } as Record<string, unknown>;
+    delete legacyCard.imageSmall;
+
+    const manifest = makeManifest('v-legacy-1', [makeSampleCard('legacy-1', 'Command Tower')]);
+    await db.catalogSnapshots.put({
+      id: SNAPSHOT_KEY,
+      version: 'v-legacy-1',
+      savedAt: '2026-11-14T00:00:00.000Z',
+      cards: [legacyCard as unknown as CompactCard],
+    });
+
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(manifest), { status: 200 }));
+    const res = await syncCardCatalog({
+      db,
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    expect(res.fromCache).toBe(true);
+    expect(res.cards[0]!.imageSmall).toBe('https://cards.scryfall.io/small/front/sol.jpg');
+    expect(res.cards[0]!.rEn).toBe(0);
+    expect(res.cards[0]!.rPay).toBe(0);
+    expect(res.cards[0]!.rFlg).toBe(0);
   });
 });

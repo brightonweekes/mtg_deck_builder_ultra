@@ -229,7 +229,15 @@ const svgSourceCache = new Map<string, string | null>();
 const assetCache = new Map<string, ResolvedManaAsset>();
 
 function toSvgDataUri(svg: string): string {
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  const compacted = svg
+    .trim()
+    .replace(/>\s+</g, '><')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/="([^"']*)"/g, "='$1'");
+  const encoded = compacted.replace(/[\s#%<>"{}|\\^`[\]]/g, (ch) =>
+    ch === ' ' ? '%20' : encodeURIComponent(ch),
+  );
+  return `data:image/svg+xml;charset=utf-8,${encoded}`;
 }
 
 /**

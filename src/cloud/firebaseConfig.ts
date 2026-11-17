@@ -6,6 +6,9 @@ import {
 } from 'firebase/app-check';
 import { getAuth, type Auth } from 'firebase/auth';
 import { getFirestore, initializeFirestore, type Firestore } from 'firebase/firestore';
+import { isFirebaseConfigured } from './lazyFirebaseProvider.js';
+
+export { isFirebaseConfigured };
 
 interface FirebaseEnvConfig {
   apiKey: string;
@@ -91,14 +94,6 @@ function ensureAppCheck(app: FirebaseApp, siteKey: string, debugToken: string): 
   } catch {
     // Non-fatal: App Check cannot initialize in headless/test or duplicate-init contexts.
   }
-}
-
-/**
- * Returns `true` when all required Firebase client environment variables are configured.
- */
-export function isFirebaseConfigured(): boolean {
-  const env = readFirebaseEnvConfig();
-  return Boolean(env.apiKey && env.authDomain && env.projectId && env.appId);
 }
 
 /**

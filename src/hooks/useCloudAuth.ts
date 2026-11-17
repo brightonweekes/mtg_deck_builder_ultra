@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   clearPendingHandleFromStorage,
-  firebaseProvider,
+  lazyFirebaseProvider,
   readPendingHandleFromStorage,
   type StorageLike,
-} from '../cloud/firebaseProvider.js';
+} from '../cloud/lazyFirebaseProvider.js';
 import { humanizeCloudError, suggestHandleFromEmail, validateHandle } from '../cloud/validation.js';
 import type { CloudProvider, CloudUser, UserProfile } from '../types/cloud.js';
 
@@ -172,7 +172,7 @@ export class CloudAuthLazyController {
   private profileRunId = 0;
 
   constructor(options: CloudAuthLazyControllerOptions = {}) {
-    this.provider = options.provider ?? firebaseProvider;
+    this.provider = options.provider ?? lazyFirebaseProvider;
     this.injectedStorage = options.storage;
 
     const isConfigured = this.provider.isConfigured();
@@ -533,11 +533,11 @@ export class CloudAuthLazyController {
  * automatic profile loading, and seamless handle claiming.
  */
 export function useCloudAuth(
-  providerOrOptions: CloudProvider | UseCloudAuthOptions = firebaseProvider,
+  providerOrOptions: CloudProvider | UseCloudAuthOptions = lazyFirebaseProvider,
 ): UseCloudAuthReturn {
   const provider = isCloudProvider(providerOrOptions)
     ? providerOrOptions
-    : (providerOrOptions.provider ?? firebaseProvider);
+    : (providerOrOptions.provider ?? lazyFirebaseProvider);
   const autoConnect = isCloudProvider(providerOrOptions)
     ? false
     : Boolean(providerOrOptions.autoConnect);

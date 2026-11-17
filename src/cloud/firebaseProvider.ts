@@ -62,6 +62,14 @@ import type {
 } from '../types/cloud.js';
 import { getFirebaseAuth, getFirebaseDb, isFirebaseConfigured } from './firebaseConfig.js';
 import {
+  clearPendingHandleFromStorage,
+  getPendingHandleStorageKey,
+  PENDING_HANDLE_STORAGE_PREFIX,
+  readPendingHandleFromStorage,
+  savePendingHandleToStorage,
+  type StorageLike,
+} from './lazyFirebaseProvider.js';
+import {
   getUtf8ByteLength,
   humanizeCloudError,
   makeFriendPairId,
@@ -74,7 +82,14 @@ import {
   type HumanizedCloudError,
 } from './validation.js';
 
-export const PENDING_HANDLE_STORAGE_PREFIX = 'ripple99_pending_handle_';
+export {
+  clearPendingHandleFromStorage,
+  getPendingHandleStorageKey,
+  PENDING_HANDLE_STORAGE_PREFIX,
+  readPendingHandleFromStorage,
+  savePendingHandleToStorage,
+  type StorageLike,
+};
 
 const MAX_FRIEND_CATALOG_DECKS = 200;
 const MAX_SYNERGY_THEMES = 20;
@@ -157,12 +172,6 @@ export interface FirebaseFirestoreOps {
     updateFunction: (transaction: Transaction) => Promise<T>,
   ) => Promise<T>;
   writeBatch: (db: Firestore) => WriteBatch;
-}
-
-export interface StorageLike {
-  getItem: (key: string) => string | null;
-  setItem: (key: string, value: string) => void;
-  removeItem: (key: string) => void;
 }
 
 export interface FirebaseProviderDeps {
@@ -267,52 +276,6 @@ export function buildAuthContinueActionCodeSettings(): ActionCodeSettings | unde
     };
   } catch {
     return undefined;
-  }
-}
-
-export function getPendingHandleStorageKey(uid: string): string {
-  return `${PENDING_HANDLE_STORAGE_PREFIX}${uid}`;
-}
-
-export function readPendingHandleFromStorage(
-  uid: string,
-  storage: StorageLike | null = getDefaultStorage(),
-): string | null {
-  if (!uid || !storage) return null;
-  try {
-    const raw = storage.getItem(getPendingHandleStorageKey(uid));
-    if (!raw) return null;
-    const check = validateHandle(raw);
-    return check.valid ? check.normalized : null;
-  } catch {
-    return null;
-  }
-}
-
-export function savePendingHandleToStorage(
-  uid: string,
-  handle: string,
-  storage: StorageLike | null = getDefaultStorage(),
-): void {
-  if (!uid || !storage) return;
-  const check = validateHandle(handle);
-  if (!check.valid) return;
-  try {
-    storage.setItem(getPendingHandleStorageKey(uid), check.normalized);
-  } catch {
-    // Ignore storage quota / privacy mode errors.
-  }
-}
-
-export function clearPendingHandleFromStorage(
-  uid: string,
-  storage: StorageLike | null = getDefaultStorage(),
-): void {
-  if (!uid || !storage) return;
-  try {
-    storage.removeItem(getPendingHandleStorageKey(uid));
-  } catch {
-    // Ignore storage errors.
   }
 }
 

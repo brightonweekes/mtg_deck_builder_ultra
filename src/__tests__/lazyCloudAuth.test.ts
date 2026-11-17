@@ -66,6 +66,10 @@ vi.mock('firebase/firestore', () => ({
 import { resetFirebaseInstancesForTesting } from '../cloud/firebaseConfig.js';
 import { firebaseProvider } from '../cloud/firebaseProvider.js';
 import {
+  lazyFirebaseProvider,
+  resetLazyFirebaseProviderForTesting,
+} from '../cloud/lazyFirebaseProvider.js';
+import {
   clearCloudSessionHint,
   CLOUD_SESSION_HINT_KEY,
   CloudAuthLazyController,
@@ -725,5 +729,28 @@ describe('Lazy Firebase + App Check Initialization (useCloudAuth & CloudAuthLazy
 
     const positionalSnap = snapshots.find((s) => s.label === 'positional')!.state;
     expect(typeof positionalSnap.activateCloud).toBe('function');
+  });
+
+  it('lazyFirebaseProvider stays dormant until invoked and delegates after loading', async () => {
+    resetLazyFirebaseProviderForTesting();
+    const authCallsBefore = sdkMocks.getAuth.mock.calls.length;
+
+    vi.stubEnv('VITE_FIREBASE_API_KEY', '');
+    expect(lazyFirebaseProvider.isConfigured()).toBe(false);
+    const seen: Array<CloudUser | null> = [];
+    const unsub = lazyFirebaseProvider.onAuthStateChanged((user) => seen.push(user));
+    expect(seen).toEqual([null]);
+    unsub();
+    expect(sdkMocks.getAuth.mock.calls.length).toBe(authCallsBefore);
+
+    vi.unstubAllEnvs();
+    const signOutSpy = vi.spyOn(firebaseProvider, 'signOut').mockResolvedValue(undefined);
+    await lazyFirebaseProvider.signOut();
+    expect(signOutSpy).toHaveBeenCalledTimes(1);
+
+    resetLazyFirebaseProviderForTesting();
+    await lazyFirebaseProvider.signOut();
+    expect(signOutSpy).toHaveBeenCalledTimes(2);
+    signOutSpy.mockRestore();
   });
 });

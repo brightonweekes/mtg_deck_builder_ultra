@@ -31,7 +31,7 @@ import type {
   SyncStatus,
   UserProfile,
 } from '../types/cloud.js';
-import { clearPendingHandleFromStorage } from './firebaseProvider.js';
+import { clearPendingHandleFromStorage } from './lazyFirebaseProvider.js';
 import {
   HANDLE_MAX_LEN,
   MAX_DECK_CARD_COUNT,

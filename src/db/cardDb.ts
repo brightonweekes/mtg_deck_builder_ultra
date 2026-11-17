@@ -102,11 +102,14 @@ export class MtgCardDatabase extends Dexie {
 
 export const cardDb = new MtgCardDatabase();
 
+export const DEFAULT_MANIFEST_TIMEOUT_MS = 1200;
+
 export interface SyncCatalogOptions {
   db?: MtgCardDatabase;
   fetchImpl?: typeof fetch;
   baseUrl?: string;
   forceRefresh?: boolean;
+  manifestTimeoutMs?: number;
   onProgress?: (status: SyncStatusPayload) => void;
 }
 
@@ -178,6 +181,34 @@ export async function clearCardCatalogCache(db: MtgCardDatabase = cardDb): Promi
   });
 }
 
+function isCardFullyHydrated(card: CompactCard): boolean {
+  if (
+    typeof card.imageSmall !== 'string' ||
+    typeof card.rEn !== 'number' ||
+    typeof card.rPay !== 'number' ||
+    typeof card.rFlg !== 'number'
+  ) {
+    return false;
+  }
+  if (card.faces && card.faces.length > 0) {
+    for (let f = 0; f < card.faces.length; f++) {
+      if (typeof card.faces[f]!.imageSmall !== 'string') {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function hydrateCachedCards(cards: CompactCard[]): CompactCard[] {
+  for (let i = 0; i < cards.length; i++) {
+    if (!isCardFullyHydrated(cards[i]!)) {
+      return cards.map(hydrateCompactCard);
+    }
+  }
+  return cards;
+}
+
 /**
  * Syncs the Commander card catalog using IndexedDB for <100ms repeat loads.
  * Only downloads `cards.min.json` on first visit, version mismatch, or `forceRefresh`.
@@ -197,33 +228,83 @@ export async function syncCardCatalog(
     message: 'Checking catalog manifest...',
   });
 
+  const cachedSnapshotPromise = options.forceRefresh
+    ? Promise.resolve(undefined)
+    : db.catalogSnapshots.get(SNAPSHOT_KEY);
+  const cachedMetaPromise = options.forceRefresh
+    ? Promise.resolve(undefined)
+    : db.meta.get(MANIFEST_KEY);
+
+  const isExplicitOffline =
+    !options.forceRefresh &&
+    options.fetchImpl === undefined &&
+    typeof globalThis.navigator !== 'undefined' &&
+    globalThis.navigator.onLine === false;
+
+  const fetchManifest = (): Promise<DataManifest> =>
+    (async () => {
+      const manifestResp = await fetchImpl(`${baseUrl}/data/manifest.json`, {
+        cache: 'no-cache',
+      });
+      if (!manifestResp.ok) {
+        throw new Error(
+          `Failed to fetch manifest.json (${manifestResp.status} ${manifestResp.statusText})`,
+        );
+      }
+      return (await manifestResp.json()) as DataManifest;
+    })();
+
+  // Start manifest check in parallel with IndexedDB snapshot read unless explicitly offline.
+  let manifestPromise: Promise<DataManifest> | null = isExplicitOffline ? null : fetchManifest();
+  if (manifestPromise) {
+    manifestPromise.catch(() => {});
+  }
+
+  const [cachedSnapshot, cachedMeta] = await Promise.all([
+    cachedSnapshotPromise,
+    cachedMetaPromise,
+  ]);
+  const hasValidCache = Boolean(
+    !options.forceRefresh && cachedSnapshot && cachedSnapshot.cards.length > 0,
+  );
+
+  if (isExplicitOffline && !hasValidCache) {
+    manifestPromise = fetchManifest();
+    manifestPromise.catch(() => {});
+  }
+
   let remoteManifest: DataManifest | null = null;
   let manifestError: unknown = null;
 
-  try {
-    const manifestResp = await fetchImpl(`${baseUrl}/data/manifest.json`, {
-      cache: 'no-cache',
-    });
-    if (!manifestResp.ok) {
-      throw new Error(
-        `Failed to fetch manifest.json (${manifestResp.status} ${manifestResp.statusText})`,
-      );
+  if (manifestPromise) {
+    try {
+      if (hasValidCache) {
+        const timeoutMs = Math.max(0, options.manifestTimeoutMs ?? DEFAULT_MANIFEST_TIMEOUT_MS);
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        try {
+          remoteManifest = await Promise.race([
+            manifestPromise,
+            new Promise<never>((_, reject) => {
+              timeoutId = setTimeout(() => {
+                reject(new Error(`Manifest check timed out after ${timeoutMs}ms`));
+              }, timeoutMs);
+            }),
+          ]);
+        } finally {
+          if (timeoutId !== undefined) clearTimeout(timeoutId);
+        }
+      } else {
+        remoteManifest = await manifestPromise;
+      }
+    } catch (err: unknown) {
+      manifestError = err;
     }
-    remoteManifest = (await manifestResp.json()) as DataManifest;
-  } catch (err: unknown) {
-    manifestError = err;
   }
 
-  // Check IndexedDB snapshot once (single structured read for fast repeat loads)
-  const cachedSnapshot = options.forceRefresh
-    ? undefined
-    : await db.catalogSnapshots.get(SNAPSHOT_KEY);
-
-  // Offline / network-error graceful fallback if valid cache exists
+  // Offline / timeout / network-error graceful fallback if valid cache exists
   if (!remoteManifest) {
     if (cachedSnapshot && cachedSnapshot.cards.length > 0) {
-      const hydrated = cachedSnapshot.cards.map(hydrateCompactCard);
-      const cachedMeta = await db.meta.get(MANIFEST_KEY);
+      const hydrated = hydrateCachedCards(cachedSnapshot.cards);
       const manifest = cachedMeta?.value ?? buildFallbackManifest(cachedSnapshot);
       const loadTimeMs = Math.max(1, Math.round(performance.now() - startTime));
       onProgress?.({
@@ -254,7 +335,7 @@ export async function syncCardCatalog(
     cachedSnapshot.version === remoteManifest.version &&
     cachedSnapshot.cards.length > 0
   ) {
-    const hydrated = cachedSnapshot.cards.map(hydrateCompactCard);
+    const hydrated = hydrateCachedCards(cachedSnapshot.cards);
     const loadTimeMs = Math.max(1, Math.round(performance.now() - startTime));
     onProgress?.({
       stage: 'loading-cache',

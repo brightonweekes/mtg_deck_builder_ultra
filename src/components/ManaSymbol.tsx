@@ -62,7 +62,7 @@ export const ManaSymbolBadge = memo(function ManaSymbolBadge({
 
 const RE_MANA_TOKEN = /\{([^}]+)\}/g;
 
-export function ManaCostDisplay({
+export const ManaCostDisplay = memo(function ManaCostDisplay({
   manaCost,
   size = 'sm',
 }: {
@@ -93,9 +93,9 @@ export function ManaCostDisplay({
       })}
     </span>
   );
-}
+});
 
-export function ColorIdentityBadges({
+export const ColorIdentityBadges = memo(function ColorIdentityBadges({
   colors,
   size = 'xs',
 }: {
@@ -112,9 +112,9 @@ export function ColorIdentityBadges({
       ))}
     </span>
   );
-}
+});
 
-export function OracleTextDisplay({ text }: { text: string }) {
+export const OracleTextDisplay = memo(function OracleTextDisplay({ text }: { text: string }) {
   if (!text) {
     return <p className="text-sm italic text-slate-500">No rules text.</p>;
   }
@@ -160,4 +160,4 @@ export function OracleTextDisplay({ text }: { text: string }) {
       })}
     </div>
   );
-}
+});

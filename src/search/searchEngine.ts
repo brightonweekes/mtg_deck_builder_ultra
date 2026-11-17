@@ -605,6 +605,7 @@ export class CardSearchEngine {
   private cardByName: Map<string, CompactCard> | null = null;
   private frontFaceByName: Map<string, CompactCard> | null = null;
   private rippleIndex: RippleIndex | null = null;
+  private singleNameLookups = 0;
 
   constructor(cards: readonly CompactCard[]) {
     const len = cards.length;
@@ -802,10 +803,52 @@ export class CardSearchEngine {
     return out;
   }
 
+  private findCardByNormalizedName(normalized: string): CompactCard | undefined {
+    const splitIdx = normalized.indexOf(' // ');
+    const frontOnly = splitIdx > 0 ? normalized.slice(0, splitIdx).trim() : '';
+
+    let frontMatch: CompactCard | undefined;
+    let frontOnlyExactMatch: CompactCard | undefined;
+    let frontOnlyDfcMatch: CompactCard | undefined;
+
+    const nameLowers = this.nameLowers;
+    const cards = this.cards;
+    for (let i = 0; i < nameLowers.length; i++) {
+      const nameLower = nameLowers[i]!;
+      if (nameLower === normalized) {
+        return cards[i];
+      }
+      if (!frontMatch && nameLower.startsWith(normalized)) {
+        const idx = nameLower.indexOf(' // ');
+        if (idx >= normalized.length && nameLower.slice(0, idx).trim() === normalized) {
+          frontMatch = cards[i];
+        }
+      }
+      if (frontOnly) {
+        if (!frontOnlyExactMatch && nameLower === frontOnly) {
+          frontOnlyExactMatch = cards[i];
+        } else if (!frontOnlyDfcMatch && nameLower.startsWith(frontOnly)) {
+          const idx = nameLower.indexOf(' // ');
+          if (idx >= frontOnly.length && nameLower.slice(0, idx).trim() === frontOnly) {
+            frontOnlyDfcMatch = cards[i];
+          }
+        }
+      }
+    }
+
+    return frontMatch ?? frontOnlyExactMatch ?? frontOnlyDfcMatch;
+  }
+
   getCardByName(name: string): CompactCard | undefined {
     const normalized = name.trim().toLowerCase();
     if (!normalized) return undefined;
-    this.ensureNameIndex();
+    if (this.cardByName === null) {
+      if (this.singleNameLookups < 8) {
+        this.singleNameLookups++;
+        return this.findCardByNormalizedName(normalized);
+      }
+      this.ensureNameIndex();
+    }
     const exact = this.cardByName!.get(normalized);
     if (exact) return exact;
     const front = this.frontFaceByName!.get(normalized);
@@ -819,6 +862,9 @@ export class CardSearchEngine {
   }
 
   getCardsByNames(names: readonly string[]): Record<string, CompactCard> {
+    if (names.length > 4) {
+      this.ensureNameIndex();
+    }
     const out: Record<string, CompactCard> = {};
     for (const rawName of names) {
       const normalized = rawName.trim().toLowerCase();
@@ -1089,7 +1135,7 @@ export class CardSearchEngine {
           (roleMask & themeMatcher.anyRoleMask) !== 0;
 
         let themeScore = 0;
-        if (fastBitHit || themeMatcher.hasAnyExtra || themeMatcher.hasFallback) {
+        if (fastBitHit || (themeMatcher.hasAnyExtra && extraThemesByIndex !== null) || themeMatcher.hasFallback) {
           for (let t = 0; t < themeMatcher.themeChecks.length; t++) {
             const check = themeMatcher.themeChecks[t]!;
             if (matchesThemeCheck(themeMaskLo, themeMaskHi, cardExtraThemes, check)) {

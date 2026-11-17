@@ -1,5 +1,5 @@
 import { Check, Crown, FlipHorizontal2, Minus, Plus, Users } from 'lucide-react';
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { ROLE_BY_ID, THEME_BY_ID } from '../config/searchConfig.js';
 import { getSynergyReasonBadgeClass } from '../search/rippleEngine.js';
 import type { CompactCard } from '../types/card.js';
@@ -22,7 +22,7 @@ interface CardTileProps {
   onAddPartner: (card: CompactCard) => void;
 }
 
-export function CardTile({
+export const CardTile = memo(function CardTile({
   match,
   viewMode,
   quantityInDeck,
@@ -387,4 +387,4 @@ export function CardTile({
       </div>
     </article>
   );
-}
+});

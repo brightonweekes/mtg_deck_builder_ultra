@@ -11,6 +11,7 @@ import { RippleChainBar } from '../components/RippleChainBar.js';
 import {
   buildMergedRippleProfile,
   buildRippleIndex,
+  computeCardRippleMasks,
   computeDeckChainBalance,
   extractRippleProfile,
   getSynergyReasonBadgeClass,
@@ -492,5 +493,64 @@ describe('Phase 3 Ripple Chains Engine & UI', () => {
 
     const enchantressMatch = prepareRippleMatcher(buildMergedRippleProfile([], ['enchantress'])!, 'all', null, null);
     expect(scoreOf(byName.get('Harmonize')!, enchantressMatch).score).toBe(0);
+  });
+
+  it('matches unmasked runtime Ripple bitmasks 1:1 with precomputed catalog masks and builds fast', () => {
+    const t0 = performance.now();
+    const precomputedIdx = buildRippleIndex(cards);
+    const buildMs = performance.now() - t0;
+    expect(buildMs).toBeLessThan(IS_CI ? 60 : 25);
+
+    const strippedCards: CompactCard[] = cards.map((card) => {
+      const copy: CompactCard = { ...card };
+      delete copy.rEn;
+      delete copy.rPay;
+      delete copy.rFlg;
+      return copy;
+    });
+    const fallbackIdx = buildRippleIndex(strippedCards);
+
+    // Spot-check computeCardRippleMasks matches raw catalog bitmasks across sample cards
+    for (let i = 0; i < cards.length; i += 251) {
+      const card = cards[i]!;
+      const computed = computeCardRippleMasks(card);
+      expect(card.rEn ?? 0).toBe(computed.rEn);
+      expect(card.rPay ?? 0).toBe(computed.rPay);
+      expect(card.rFlg ?? 0).toBe(computed.rFlg);
+    }
+
+    for (const commanderName of ['Meren of Clan Nel Toth', 'Korvold, Fae-Cursed King']) {
+      const seed = byName.get(commanderName)!;
+      const profile = extractRippleProfile([seed]);
+      const matcher = prepareRippleMatcher(profile, 'all', null, null);
+      for (let i = 0; i < cards.length; i += 37) {
+        const preHit = scoreRippleCard(
+          i,
+          cards[i]!,
+          cards[i]!.typeLine.toLowerCase(),
+          precomputedIdx,
+          matcher,
+          true,
+        );
+        const fbHit = scoreRippleCard(
+          i,
+          strippedCards[i]!,
+          strippedCards[i]!.typeLine.toLowerCase(),
+          fallbackIdx,
+          matcher,
+          true,
+        );
+        expect(preHit.score).toBe(fbHit.score);
+        expect(preHit.reasons).toEqual(fbHit.reasons);
+      }
+    }
+
+    // Cached tribal & custom keyword repeat searches stay deterministic and fast
+    const cachedFilter = withFilter({ themes: ['tribe:Elf', 'custom:deathtouch'], pageSize: 40 });
+    const first = engine.search(cachedFilter);
+    const second = engine.search(cachedFilter);
+    expect(second.totalMatches).toBe(first.totalMatches);
+    expect(second.matches.map((m) => m.card.id)).toEqual(first.matches.map((m) => m.card.id));
+    expect(second.executionTimeMs).toBeLessThan(MAX_RIPPLE_QUERY_MS);
   });
 });

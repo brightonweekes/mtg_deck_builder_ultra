@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { firebaseProvider } from '../cloud/firebaseProvider.js';
+import { lazyFirebaseProvider } from '../cloud/lazyFirebaseProvider.js';
 import { humanizeCloudError, normalizeHandle } from '../cloud/validation.js';
 import type {
   CloudDeckRecord,
@@ -35,7 +35,7 @@ export interface UseFriendsReturn {
 export function useFriends(
   user: CloudUser | null,
   profile: UserProfile | null,
-  provider: CloudProvider = firebaseProvider,
+  provider: CloudProvider = lazyFirebaseProvider,
 ): UseFriendsReturn {
   const [friendships, setFriendships] = useState<FriendshipRecord[]>([]);
   const [friendDecksByUid, setFriendDecksByUid] = useState<Record<string, FriendDeckSummary[]>>({});

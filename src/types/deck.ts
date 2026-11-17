@@ -2,7 +2,7 @@ import type { CompactCard, ManaColor } from './card.js';
 import type { DeckVisibility, SyncStatus } from './cloud.js';
 
 export type ViewMode = 'standard' | 'compact' | 'detailed';
-export type WorkspaceTab = 'search' | 'deck';
+export type WorkspaceTab = 'home' | 'search' | 'deck';
 export type DeckGroupMode = 'role' | 'type' | 'cmc' | 'color';
 
 export interface DeckCardEntry {

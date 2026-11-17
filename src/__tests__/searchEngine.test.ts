@@ -554,4 +554,41 @@ describe('CardSearchEngine against real 32,000+-card Commander catalog', () => {
     expect(dtRes.totalMatches).toBeGreaterThan(0);
     expect(new Set(dtRes.matches.map((m) => m.card.name)).has('Fynn, the Fangbearer')).toBe(true);
   });
+
+  it('resolves exact and DFC names consistently across fast small-batch scans and indexed Maps', () => {
+    const freshEngine = new CardSearchEngine(realCards);
+
+    // First <= 8 single lookups bypass Map allocation via fast nameLowers scan
+    const smallBatch = freshEngine.getCardsByNames([
+      'Sol Ring',
+      'Esika, God of the Tree',
+      'Delver of Secrets // Insectile Aberration',
+      'Nonexistent Card XYZ',
+    ]);
+    expect(smallBatch['sol ring']?.name).toBe('Sol Ring');
+    expect(smallBatch['esika, god of the tree']?.name).toBe(
+      'Esika, God of the Tree // The Prismatic Bridge',
+    );
+    expect(smallBatch['delver of secrets // insectile aberration']?.name).toBe(
+      'Delver of Secrets // Insectile Aberration',
+    );
+    expect(smallBatch['nonexistent card xyz']).toBeUndefined();
+
+    // Batch > 4 builds name Maps upfront and yields identical results
+    const largerBatch = freshEngine.getCardsByNames([
+      'Sol Ring',
+      'Esika, God of the Tree',
+      'Arcane Signet',
+      'Command Tower',
+      'Rhystic Study',
+    ]);
+    expect(largerBatch['sol ring']?.id).toBe(smallBatch['sol ring']?.id);
+    expect(largerBatch['esika, god of the tree']?.id).toBe(
+      smallBatch['esika, god of the tree']?.id,
+    );
+    expect(freshEngine.getCardByName('sol ring')?.id).toBe(smallBatch['sol ring']?.id);
+    expect(freshEngine.getCardByName('Esika, God of the Tree')?.id).toBe(
+      smallBatch['esika, god of the tree']?.id,
+    );
+  });
 });

@@ -16,9 +16,12 @@ import { DeckWorkspace } from './components/DeckWorkspace.js';
 import { FilterSidebar } from './components/FilterSidebar.js';
 import { FriendsModal } from './components/FriendsModal.js';
 import { HeaderBar } from './components/HeaderBar.js';
+import {
+  buildHomeSynergyFilter,
+  HomeLandingView,
+} from './components/HomeLandingView.js';
 import { LegalFooter } from './components/LegalFooter.js';
 import { QuickDeckDrawer } from './components/QuickDeckDrawer.js';
-import { QuickStartBanner } from './components/QuickStartBanner.js';
 import { RippleChainBar } from './components/RippleChainBar.js';
 import { SharedDeckBanner } from './components/SharedDeckBanner.js';
 import { SyncConflictModal } from './components/SyncConflictModal.js';
@@ -76,6 +79,10 @@ export function hasAuthReturnIntent(search: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function shouldRenderLegalFooter(activeTab: WorkspaceTab): boolean {
+  return activeTab !== 'home';
 }
 
 export function hasCloudUrlIntent(search: string): boolean {
@@ -197,7 +204,7 @@ export function App() {
   });
   scheduleCloudPushRef.current = cloudSync.scheduleCloudPush;
 
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>('search');
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('home');
   const [viewMode, setViewMode] = useState<ViewMode>('standard');
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [deckDrawerOpen, setDeckDrawerOpen] = useState(false);
@@ -806,37 +813,46 @@ export function App() {
     ],
   );
 
-  const handleSelectSampleCommander = useCallback(
+  const handleSetCommanderOnHome = useCallback(
     (card: CompactCard) => {
-      const nextIdentity = setCommander(card);
-      if (nextIdentity === null) return;
-      const seedProfile = extractRippleProfile([card]);
+      handleSetCommander(card);
+    },
+    [handleSetCommander],
+  );
+
+  const handleExploreSynergiesInCatalog = useCallback(
+    (card: CompactCard) => {
+      const nextFilter = buildHomeSynergyFilter(card, deck);
       setRippleSeedCards([card]);
+      setHideDeckCardsInRipple(false);
       updateFilter(
         {
-          rippleSeedIds: [card.id],
-          rippleMode: 'all',
-          rippleHookKey: null,
-          themeQuery: '',
-          sortBy: 'synergy',
-          themes: seedProfile.defaultThemes,
-          roles: [],
-          commanderOnly: false,
-          partnerType: null,
-          colorIdentity: deck.lockSearchToCommanderIdentity
-            ? nextIdentity
-            : filter.colorIdentity,
+          ...nextFilter,
+          pageSize: filter.pageSize,
         },
         { immediate: true },
       );
       setActiveTab('search');
+      window.scrollTo?.({ top: 0, behavior: 'smooth' });
     },
-    [
-      deck.lockSearchToCommanderIdentity,
-      filter.colorIdentity,
-      setCommander,
-      updateFilter,
-    ],
+    [deck, filter.pageSize, updateFilter],
+  );
+
+  const handleSearchQueryInCatalog = useCallback(
+    (query: string) => {
+      updateFilter(
+        {
+          query,
+          commanderOnly: false,
+          partnerType: null,
+          page: 1,
+        },
+        { immediate: true },
+      );
+      setActiveTab('search');
+      window.scrollTo?.({ top: 0, behavior: 'smooth' });
+    },
+    [updateFilter],
   );
 
   const handleRippleModeChange = useCallback(
@@ -1149,72 +1165,88 @@ export function App() {
         </div>
       )}
 
-      {/* Workspace Switch: Catalog Search vs Full Deck Studio */}
-      {activeTab === 'search' ? (
-        <>
-          <QuickStartBanner
-            activeTab={activeTab}
-            totalCatalogCards={syncStatus.manifest?.totalCards ?? 32643}
-            resolveCards={resolveCards}
-            onOpenAudit={() => setAuditModalOpen(true)}
-            onSelectSampleCommander={handleSelectSampleCommander}
+      {/* Workspace Switch: Home Launchpad vs Catalog Search vs Full Deck Studio */}
+      {activeTab === 'home' ? (
+        <HomeLandingView
+          deck={deck}
+          savedDecks={savedDecks}
+          analytics={analytics}
+          totalCardCount={totalCardCount}
+          syncReady={isReady}
+          resolveCards={resolveCards}
+          runOneOffSearch={runOneOffSearch}
+          getCardQuantity={getCardQuantity}
+          isCommander={isCommander}
+          onSetCommander={handleSetCommanderOnHome}
+          onAddPartner={handleAddPartner}
+          onAddCard={addCard}
+          onInspectCard={handleInspectRawCard}
+          onExploreSynergiesInCatalog={handleExploreSynergiesInCatalog}
+          onSearchQueryInCatalog={handleSearchQueryInCatalog}
+          onQuickFilterRole={handleQuickFilterRole}
+          onChooseCommander={handleChooseCommander}
+          onOpenStudio={() => setActiveTab('deck')}
+          onOpenAudit={() => setAuditModalOpen(true)}
+          onSwitchDeck={(deckId) => {
+            void handleSwitchDeck(deckId);
+          }}
+        />
+      ) : activeTab === 'search' ? (
+        <div className="mx-auto flex max-w-[1600px] items-start gap-5 px-4 py-4">
+          <FilterSidebar
+            filter={filter}
+            commanders={deck.commanders}
+            mobileOpen={mobileFiltersOpen}
+            onCloseMobile={() => setMobileFiltersOpen(false)}
+            onUpdateFilter={updateFilter}
+            onResetFilters={handleResetFilters}
+            onFindPartner={handleFindPartner}
           />
-          <div className="mx-auto flex max-w-[1600px] items-start gap-5 px-4 py-4">
-            <FilterSidebar
+
+          <main className="min-w-0 flex-1 space-y-3">
+            {activeRippleProfile && (
+              <RippleChainBar
+                profile={activeRippleProfile}
+                mode={filter.rippleMode ?? 'all'}
+                activeThemes={filter.themes}
+                activeHookKey={filter.rippleHookKey ?? null}
+                hideDeckCards={hideDeckCardsInRipple}
+                deckCardCount={deckMainboardCards.length}
+                deckBalance={deckChainBalance}
+                onSelectMode={handleRippleModeChange}
+                onSelectHook={handleRippleHookChange}
+                onRemoveTheme={handleRemoveRippleTheme}
+                onToggleHideDeckCards={handleToggleHideDeckCardsInRipple}
+                onClearRipple={handleClearRipple}
+              />
+            )}
+
+            <ActiveFilterBar
               filter={filter}
-              commanders={deck.commanders}
-              mobileOpen={mobileFiltersOpen}
-              onCloseMobile={() => setMobileFiltersOpen(false)}
+              searchResult={searchResult}
+              isSearching={isSearching}
+              viewMode={viewMode}
+              onViewModeChange={setViewMode}
               onUpdateFilter={updateFilter}
               onResetFilters={handleResetFilters}
-              onFindPartner={handleFindPartner}
             />
 
-            <main className="min-w-0 flex-1 space-y-3">
-              {activeRippleProfile && (
-                <RippleChainBar
-                  profile={activeRippleProfile}
-                  mode={filter.rippleMode ?? 'all'}
-                  activeThemes={filter.themes}
-                  activeHookKey={filter.rippleHookKey ?? null}
-                  hideDeckCards={hideDeckCardsInRipple}
-                  deckCardCount={deckMainboardCards.length}
-                  deckBalance={deckChainBalance}
-                  onSelectMode={handleRippleModeChange}
-                  onSelectHook={handleRippleHookChange}
-                  onRemoveTheme={handleRemoveRippleTheme}
-                  onToggleHideDeckCards={handleToggleHideDeckCardsInRipple}
-                  onClearRipple={handleClearRipple}
-                />
-              )}
-
-              <ActiveFilterBar
-                filter={filter}
-                searchResult={searchResult}
-                isSearching={isSearching}
-                viewMode={viewMode}
-                onViewModeChange={setViewMode}
-                onUpdateFilter={updateFilter}
-                onResetFilters={handleResetFilters}
-              />
-
-              <CardGrid
-                searchResult={searchResult}
-                viewMode={viewMode}
-                commanders={deck.commanders}
-                enforceColorIdentity={deck.lockSearchToCommanderIdentity}
-                getCardQuantity={getCardQuantity}
-                isCommander={isCommander}
-                onPageChange={handlePageChange}
-                onInspectCard={setInspectedMatch}
-                onAddCard={addCard}
-                onRemoveOneCard={removeOneCard}
-                onSetCommander={handleSetCommander}
-                onAddPartner={handleAddPartner}
-              />
-            </main>
-          </div>
-        </>
+            <CardGrid
+              searchResult={searchResult}
+              viewMode={viewMode}
+              commanders={deck.commanders}
+              enforceColorIdentity={deck.lockSearchToCommanderIdentity}
+              getCardQuantity={getCardQuantity}
+              isCommander={isCommander}
+              onPageChange={handlePageChange}
+              onInspectCard={setInspectedMatch}
+              onAddCard={addCard}
+              onRemoveOneCard={removeOneCard}
+              onSetCommander={handleSetCommander}
+              onAddPartner={handleAddPartner}
+            />
+          </main>
+        </div>
       ) : (
         <DeckWorkspace
           deck={deck}
@@ -1491,7 +1523,7 @@ export function App() {
       )}
       </div>
 
-      <LegalFooter />
+      {shouldRenderLegalFooter(activeTab) && <LegalFooter />}
     </div>
   );
 }

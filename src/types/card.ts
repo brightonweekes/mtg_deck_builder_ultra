@@ -64,6 +64,9 @@ export interface CompactCard {
   maxCopies?: number | null;
   roles: FunctionalRole[];
   themes: string[];
+  rEn?: number;
+  rPay?: number;
+  rFlg?: number;
 }
 
 export interface DataManifest {
@@ -174,6 +177,15 @@ export type SerializedCompactCard = Omit<CompactCard, 'imageSmall' | 'artCrop'> 
 export function compactCardForDisk(card: CompactCard): SerializedCompactCard {
   const copy: SerializedCompactCard = { ...card };
   delete (copy as Partial<CompactCard>).artCrop;
+  if (!card.rEn) {
+    delete copy.rEn;
+  }
+  if (!card.rPay) {
+    delete copy.rPay;
+  }
+  if (!card.rFlg) {
+    delete copy.rFlg;
+  }
   const derivedSmall = deriveSmallImageUrl(card.imageNormal);
   if (!card.imageSmall || card.imageSmall === derivedSmall) {
     delete copy.imageSmall;
@@ -200,8 +212,17 @@ export function hydrateCompactCard(raw: SerializedCompactCard): CompactCard {
   const needsFaceSmall = Boolean(
     faces && faces.some((f) => Boolean(f.imageNormal && !f.imageSmall)),
   );
+  const needsRippleFields =
+    typeof raw.rEn !== 'number' ||
+    typeof raw.rPay !== 'number' ||
+    typeof raw.rFlg !== 'number';
 
-  if (!needsFrontSmall && !needsFaceSmall && typeof raw.imageSmall === 'string') {
+  if (
+    !needsFrontSmall &&
+    !needsFaceSmall &&
+    !needsRippleFields &&
+    typeof raw.imageSmall === 'string'
+  ) {
     return raw as CompactCard;
   }
 
@@ -217,6 +238,9 @@ export function hydrateCompactCard(raw: SerializedCompactCard): CompactCard {
   return {
     ...raw,
     imageSmall,
+    rEn: raw.rEn ?? 0,
+    rPay: raw.rPay ?? 0,
+    rFlg: raw.rFlg ?? 0,
     ...(hydratedFaces ? { faces: hydratedFaces } : {}),
   };
 }

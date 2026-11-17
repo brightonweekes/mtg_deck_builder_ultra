@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { firebaseProvider } from '../cloud/firebaseProvider.js';
+import { lazyFirebaseProvider } from '../cloud/lazyFirebaseProvider.js';
 import {
   CloudSyncEngine,
   isUntouchedStarterDeck,
@@ -224,7 +224,7 @@ export class CloudSyncController {
   };
 
   constructor(options: CloudSyncControllerOptions) {
-    this.provider = options.provider ?? firebaseProvider;
+    this.provider = options.provider ?? lazyFirebaseProvider;
     this.db = options.db ?? cardDb;
     this.debounceMs = options.debounceMs ?? CLOUD_PUSH_DEBOUNCE_MS;
     this.onExternalDecksUpdated = options.onExternalDecksUpdated;
@@ -776,7 +776,7 @@ export function useCloudSync(options: UseCloudSyncOptions): UseCloudSyncReturn {
     savedDecks,
     onExternalDecksUpdated,
     onSignOut,
-    provider = firebaseProvider,
+    provider = lazyFirebaseProvider,
     db = cardDb,
     debounceMs = CLOUD_PUSH_DEBOUNCE_MS,
   } = options;

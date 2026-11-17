@@ -37,6 +37,19 @@ function injectCloudflareAnalytics(): void {
 
 injectCloudflareAnalytics();
 
+if (typeof window !== 'undefined') {
+  const scheduleOfflineSw = () => {
+    void import('./pwa/registerSw.js').then(({ registerOfflineServiceWorker }) => {
+      void registerOfflineServiceWorker();
+    });
+  };
+  if (typeof document !== 'undefined' && document.readyState === 'complete') {
+    scheduleOfflineSw();
+  } else {
+    window.addEventListener('load', scheduleOfflineSw, { once: true });
+  }
+}
+
 const rootEl = document.getElementById('root');
 if (!rootEl) {
   throw new Error('Root element #root not found in index.html');
