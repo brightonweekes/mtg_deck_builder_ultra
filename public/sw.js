@@ -72,13 +72,19 @@ self.addEventListener('message', (event) => {
 
 async function handleNavigationRequest(request) {
   const cache = await caches.open(SHELL_CACHE_NAME);
+  const url = new URL(request.url);
+  const isRootShell = url.pathname === '/' || url.pathname === '/index.html';
   try {
     const response = await fetch(request);
     if (response.ok && response.type === 'basic') {
-      await cache.put('/', response.clone());
+      await cache.put(isRootShell ? '/' : request, response.clone());
     }
     return response;
   } catch {
+    if (!isRootShell) {
+      const cachedPage = await cache.match(request);
+      if (cachedPage) return cachedPage;
+    }
     const cachedRoot = (await cache.match('/')) || (await cache.match('/index.html'));
     if (cachedRoot) return cachedRoot;
     return Response.error();

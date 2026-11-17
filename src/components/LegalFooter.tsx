@@ -46,6 +46,26 @@ export function LegalFooter({ defaultPolicyOpen = false }: LegalFooterProps) {
             <p className="text-[11px] text-slate-500">
               Card data &amp; images provided by Scryfall.
             </p>
+            <nav
+              aria-label="Commander guides and tools"
+              className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-0.5 text-[11px] text-slate-400"
+            >
+              <a href="/commander/" className="transition hover:text-amber-200">
+                Commanders Directory
+              </a>
+              <span className="text-slate-700">·</span>
+              <a href="/theme/" className="transition hover:text-violet-200">
+                Mechanical Themes
+              </a>
+              <span className="text-slate-700">·</span>
+              <a href="/budget/" className="transition hover:text-emerald-200">
+                Under-$2 Budget Guides
+              </a>
+              <span className="text-slate-700">·</span>
+              <a href="/tools/" className="transition hover:text-cyan-200">
+                Free Deck Tools
+              </a>
+            </nav>
           </div>
 
           <div className="shrink-0">

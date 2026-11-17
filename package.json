@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && npm run build:seo",
+    "build:seo": "tsx scripts/generate-seo-pages.ts",
     "preview": "vite preview",
     "build:cards": "tsx scripts/build-card-index.ts",
     "inspect:cards": "tsx scripts/inspect-cards.ts",

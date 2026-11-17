@@ -44,9 +44,14 @@ import {
   getCompatiblePartnerFilter,
 } from './search/commanderRules.js';
 import {
+  hasAppLaunchIntent,
+  parseAppLaunchIntent,
+} from './search/deepLinkIntent.js';
+import {
   buildMergedRippleProfile,
   computeDeckChainBalance,
   extractRippleProfile,
+  resolveCanonicalThemeInput,
 } from './search/rippleEngine.js';
 import type { CompactCard, FunctionalRole, ManaColor } from './types/card.js';
 import type { CloudDeckRecord } from './types/cloud.js';
@@ -238,6 +243,7 @@ export function App() {
 
   const handledShareUrlRef = useRef(false);
   const handledCloudUrlRef = useRef(false);
+  const handledLaunchUrlRef = useRef(false);
   const initialAuthReturnRef = useRef<boolean>(
     typeof window !== 'undefined' && hasAuthReturnIntent(window.location.search),
   );
@@ -452,6 +458,151 @@ export function App() {
       setPendingFriendHandle(addFriendHandle);
     }
   }, [openSharedDeckById]);
+
+  // Hydrate SEO launch deep links (`?commander=`, `?theme=`, `?budget=`, `?tool=`) once catalog is ready
+  useEffect(() => {
+    if (syncStatus.stage !== 'ready' || handledLaunchUrlRef.current) return;
+    handledLaunchUrlRef.current = true;
+    if (typeof window === 'undefined') return;
+
+    const rawParams = new URLSearchParams(window.location.search);
+    if (rawParams.has('d') || rawParams.has('deck')) return;
+
+    const intent = parseAppLaunchIntent(window.location.search);
+    if (!hasAppLaunchIntent(intent)) return;
+
+    stripUrlQueryParams('commander', 'mode', 'theme', 'budget', 'tool');
+
+    if (intent.commanderQuery) {
+      const targetQuery = intent.commanderQuery;
+      void (async () => {
+        const resolved = await resolveCards({
+          ids: [targetQuery],
+          names: [targetQuery],
+        });
+        const card =
+          resolved.byId[targetQuery] ??
+          resolved.byName[targetQuery.toLowerCase()];
+        if (!card || !card.isCommanderEligible) return;
+
+        const nextIdentity = setCommander(card);
+        if (nextIdentity === null) return;
+        const seedProfile = extractRippleProfile([card]);
+        setRippleSeedCards([card]);
+        updateFilter(
+          {
+            rippleSeedIds: [card.id],
+            rippleMode: intent.rippleMode ?? 'all',
+            rippleHookKey: null,
+            themeQuery: '',
+            themes: seedProfile.defaultThemes,
+            roles: [],
+            commanderOnly: false,
+            partnerType: null,
+            maxPriceUsd: intent.maxPriceUsd,
+            sortBy: 'synergy',
+            colorIdentity: deck.lockSearchToCommanderIdentity
+              ? nextIdentity
+              : filter.colorIdentity,
+          },
+          { immediate: true },
+        );
+        setActiveTab('search');
+      })();
+      return;
+    }
+
+    if (intent.themeInput) {
+      const canonical = resolveCanonicalThemeInput(intent.themeInput);
+      if (canonical) {
+        updateFilter(
+          {
+            rippleSeedIds: [],
+            rippleHookKey: null,
+            themeQuery: '',
+            themes: [canonical],
+            maxPriceUsd: intent.maxPriceUsd,
+            commanderOnly: false,
+            partnerType: null,
+            sortBy: 'synergy',
+          },
+          { immediate: true },
+        );
+        setRippleSeedCards([]);
+        setActiveTab('search');
+        return;
+      }
+    }
+
+    if (intent.tool === 'audit') {
+      setAuditModalOpen(true);
+      return;
+    }
+
+    if (intent.tool === 'budget-swaps') {
+      if (Object.keys(deck.mainboard).length > 0) {
+        setActiveTab('deck');
+        setBudgetSwapModalState({ open: true, targetCardId: null });
+      } else {
+        setAuditModalOpen(true);
+      }
+      return;
+    }
+
+    if (intent.tool === 'partner') {
+      updateFilter(
+        {
+          rippleSeedIds: [],
+          themes: [],
+          themeQuery: '',
+          commanderOnly: true,
+          partnerType: 'partner',
+          sortBy: 'edhrec',
+          colorIdentity: null,
+        },
+        { immediate: true },
+      );
+      setActiveTab('search');
+      return;
+    }
+
+    if (intent.tool === 'ripple') {
+      if (deck.commanders.length > 0) {
+        const seedProfile = extractRippleProfile(deck.commanders);
+        setRippleSeedCards(deck.commanders);
+        updateFilter(
+          {
+            rippleSeedIds: deck.commanders.map((c) => c.id),
+            rippleMode: intent.rippleMode ?? 'all',
+            themes: seedProfile.defaultThemes,
+            sortBy: 'synergy',
+            commanderOnly: false,
+            colorIdentity: deck.lockSearchToCommanderIdentity
+              ? combinedColorIdentity
+              : filter.colorIdentity,
+          },
+          { immediate: true },
+        );
+      } else {
+        updateFilter(
+          getChooseCommanderFilter({ sortBy: 'edhrec', pageSize: filter.pageSize }),
+          { immediate: true },
+        );
+      }
+      setActiveTab('search');
+    }
+  }, [
+    combinedColorIdentity,
+    deck.commanders,
+    deck.lockSearchToCommanderIdentity,
+    deck.mainboard,
+    filter.colorIdentity,
+    filter.pageSize,
+    resolveCards,
+    setCommander,
+    syncStatus.stage,
+    updateFilter,
+  ]);
 
   // Guide `?addFriend=<handle>` through Auth (if needed) into FriendsModal prefilled
   useEffect(() => {
